@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="BakeSuite ERP - Enterprise Bakery Intelligence & Production Planning Workbench">
+  <title>BakeSuite ERP | Bakery Intelligence Suite</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="app-layout">
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-badge">BS</div>
+        <div class="brand-text">
+          <span class="brand-title">BakeSuite</span>
+          <span class="brand-sub">ERP Intelligence</span>
+        </div>
+      </div>
+
+      <nav class="nav-menu">
+        <div class="nav-section-title">Production & Planning</div>
+        <a href="#workbench" class="nav-item active" id="nav-forecast-workbench">
+          <svg class="nav-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+          </svg>
+          <span>Forecast Workbench</span>
+          <span class="chip-active">AI-01</span>
+        </a>
+        <a href="#indent" class="nav-item" id="nav-branch-indent">
+          <svg class="nav-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" />
+          </svg>
+          <span>Branch Indent Plan</span>
+        </a>
+        <a href="#production" class="nav-item" id="nav-production-plan">
+          <svg class="nav-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
+          </svg>
+          <span>Central Kitchen Bake</span>
+        </a>
+        <a href="#purchase" class="nav-item" id="nav-purchase-req">
+          <svg class="nav-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
+          </svg>
+          <span>Purchase Requirements</span>
+        </a>
+
+        <div class="nav-section-title">Regional & Diagnostics</div>
+        <div class="regional-box">
+          <div class="reg-item">
+            <span class="reg-label">Live PKT Time:</span>
+            <span class="reg-val" id="disp-pkt-clock">Loading...</span>
+          </div>
+          <div class="reg-item">
+            <span class="reg-label">Timezone:</span>
+            <span class="reg-val" id="disp-timezone">Asia/Karachi</span>
+          </div>
+          <div class="reg-item">
+            <span class="reg-label">Date Format:</span>
+            <span class="reg-val" id="disp-date">DD-MM-YYYY</span>
+          </div>
+          <div class="reg-item">
+            <span class="reg-label">Currency:</span>
+            <span class="reg-val">PKR (Rs)</span>
+          </div>
+        </div>
+      </nav>
+
+      <div class="circuit-breaker-card">
+        <div class="cb-header">
+          <span class="cb-title">ML Service Link</span>
+          <span class="status-indicator online" id="service-status-dot"></span>
+        </div>
+        <p class="cb-desc">Simulate service outage to trigger deterministic fallback.</p>
+        <button class="btn-toggle-cb" id="btn-toggle-circuit-breaker">Simulate Outage (AC-4)</button>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      <!-- Top Header -->
+      <header class="topbar">
+        <div class="topbar-left">
+          <h1 class="page-title" id="page-title">Forecast Workbench</h1>
+          <span class="page-subtitle" id="page-subtitle">AI-01 Probabilistic Demand Intelligence (P10 / P50 / P90)</span>
+        </div>
+        <div class="topbar-right">
+          <div class="horizon-pill" id="horizon-status-pill">
+            <span class="pill-dot"></span>
+            <span id="horizon-text">35-Day Horizon Active</span>
+          </div>
+          <div class="last-batch-info" id="batch-run-time">
+            Last batch scored: 02:15 PKT
+          </div>
+        </div>
+      </header>
+
+      <!-- VIEW 1: FORECAST WORKBENCH -->
+      <section id="view-workbench" class="view-panel active">
+        <!-- Global Filter Bar -->
+        <section class="filter-section">
+          <div class="filter-group">
+            <label for="select-branch">Branch Location:</label>
+            <select id="select-branch" class="custom-select">
+              <option value="BR-KHI-01">BR-KHI-01: Karachi Clifton Flagship</option>
+              <option value="BR-LHR-01">BR-LHR-01: Lahore Gulberg Emporium</option>
+              <option value="BR-ISB-01">BR-ISB-01: Islamabad F-7 Markaz</option>
+            </select>
+          </div>
+
+          <div class="filter-group">
+            <label for="select-category">Category Filter:</label>
+            <select id="select-category" class="custom-select">
+              <option value="ALL">All Categories (32 SKUs)</option>
+              <option value="BREAD">Breads & Traditional Loaves</option>
+              <option value="CAKE">Cakes & Pastries</option>
+              <option value="SAVORY">Savories & Hot Kitchen</option>
+              <option value="SWEET">Traditional Sweets & Mithai</option>
+              <option value="BEVERAGE">Beverages & Coffee</option>
+            </select>
+          </div>
+
+          <div class="filter-group search-group">
+            <label for="input-search">Search SKU:</label>
+            <input type="text" id="input-search" class="custom-input" placeholder="Search by SKU name or code...">
+          </div>
+
+          <button class="btn-refresh" id="btn-refresh-data">Refresh Data</button>
+          <button class="btn-action btn-accent" id="btn-export-forecast" title="Download active forecast table as CSV">Export CSV</button>
+          <button class="btn-action" id="btn-rescore-ai" title="Trigger fast AI demand rescoring">Rescore AI</button>
+        </section>
+
+        <!-- KPI Summary Cards -->
+        <section class="kpi-grid">
+          <div class="kpi-card">
+            <div class="kpi-icon icon-units">📦</div>
+            <div class="kpi-details">
+              <span class="kpi-label">35-Day Forward Demand</span>
+              <span class="kpi-value" id="kpi-total-units">124,580 Units</span>
+              <span class="kpi-trend positive" id="kpi-units-trend">+18.4% vs trailing 35d</span>
+            </div>
+          </div>
+
+          <div class="kpi-card">
+            <div class="kpi-icon icon-rev">₨</div>
+            <div class="kpi-details">
+              <span class="kpi-label">Projected Forward Revenue</span>
+              <span class="kpi-value" id="kpi-total-revenue">Rs 34,820,450.00</span>
+              <span class="kpi-trend positive">Peak Margin Mix</span>
+            </div>
+          </div>
+
+          <div class="kpi-card">
+            <div class="kpi-icon icon-conf">🎯</div>
+            <div class="kpi-details">
+              <span class="kpi-label">High-Confidence Share</span>
+              <span class="kpi-value" id="kpi-high-conf">94.2%</span>
+              <span class="kpi-trend neutral">Auto-Action Eligible</span>
+            </div>
+          </div>
+
+          <div class="kpi-card">
+            <div class="kpi-icon icon-event">🌙</div>
+            <div class="kpi-details">
+              <span class="kpi-label">Governing Lunar Event</span>
+              <span class="kpi-value" id="kpi-lunar-event">Ramadan Pre-Season</span>
+              <span class="kpi-trend highlight">Sheermal/Rusk Surge</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- Forecast Visualization Chart -->
+        <section class="chart-section">
+          <div class="chart-header">
+            <div class="chart-title-area">
+              <h2 class="chart-title" id="chart-sku-title">Demand Trajectory: 28-Day Actuals vs 14-Day Forecast</h2>
+              <span class="chart-subtitle" id="chart-sku-subtitle">Click any SKU row in the grid below to inspect its trajectory (P10 to P90 uncertainty band & P50 median)</span>
+            </div>
+            <div class="chart-legend">
+              <div class="legend-item"><span class="legend-line line-actual"></span><span>Actual Demand</span></div>
+              <div class="legend-item"><span class="legend-line line-p50"></span><span>P50 Expected</span></div>
+              <div class="legend-item"><span class="legend-box box-quantiles"></span><span>P10–P90 Interval</span></div>
+            </div>
+          </div>
+          <div class="chart-container">
+            <canvas id="forecastChart" height="90"></canvas>
+          </div>
+        </section>
+
+        <!-- Data Table Area -->
+        <section class="table-section">
+          <div class="table-header">
+            <div class="table-title-area">
+              <h2 class="table-title">SKU Indent & Bake Plan Grid</h2>
+              <span class="table-subtitle">Select any row to view chart. Use Override button for auditable manual adjustments</span>
+            </div>
+            <div class="table-actions">
+              <span class="showing-count" id="showing-text">Showing 32 active items</span>
+            </div>
+          </div>
+
+          <div class="table-wrapper">
+            <table class="forecast-table" id="forecast-grid-table">
+              <thead>
+                <tr>
+                  <th>SKU Information</th>
+                  <th>Category</th>
+                  <th>P10 Lower</th>
+                  <th>P50 Expected</th>
+                  <th>P90 Upper</th>
+                  <th>Predictive Interval</th>
+                  <th>Confidence</th>
+                  <th>Expected Sales</th>
+                  <th>Event Context</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="forecast-table-body">
+                <!-- Dynamically populated rows -->
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <!-- VIEW 2: BRANCH INDENT PLAN -->
+      <section id="view-indent" class="view-panel hidden">
+        <section class="filter-section">
+          <div class="filter-group">
+            <label for="select-indent-branch">Target Branch:</label>
+            <select id="select-indent-branch" class="custom-select">
+              <option value="BR-KHI-01">BR-KHI-01: Karachi Clifton Flagship</option>
+              <option value="BR-LHR-01">BR-LHR-01: Lahore Gulberg Emporium</option>
+              <option value="BR-ISB-01">BR-ISB-01: Islamabad F-7 Markaz</option>
+            </select>
+          </div>
+
+          <div class="filter-group">
+            <label for="select-indent-status">Indent Status:</label>
+            <select id="select-indent-status" class="custom-select">
+              <option value="ALL">All Statuses</option>
+              <option value="Pending Approval">Pending Approval</option>
+              <option value="Approved">Approved</option>
+              <option value="Dispatched">Dispatched</option>
+            </select>
+          </div>
+
+          <div class="filter-group search-group">
+            <label for="input-indent-search">Filter SKU:</label>
+            <input type="text" id="input-indent-search" class="custom-input" placeholder="Search branch items...">
+          </div>
+
+          <button class="btn-action btn-success" id="btn-approve-all-indents">Approve All Pending</button>
+          <button class="btn-action" id="btn-export-indents">Export Indents (CSV)</button>
+        </section>
+
+        <!-- KPI Summary Cards -->
+        <section class="kpi-grid">
+          <div class="kpi-card">
+            <div class="kpi-icon icon-units">📑</div>
+            <div class="kpi-details">
+              <span class="kpi-label">Total Indent Demand</span>
+              <span class="kpi-value" id="kpi-indent-units">3,420 PCS</span>
+              <span class="kpi-trend positive">Next Delivery Wave</span>
+            </div>
+          </div>
+
+          <div class="kpi-card">
+            <div class="kpi-icon icon-conf">⏳</div>
+            <div class="kpi-details">
+              <span class="kpi-label">Pending Approval</span>
+              <span class="kpi-value" id="kpi-indent-pending">8 SKUs</span>
+              <span class="kpi-trend highlight">Requires Branch Sign-off</span>
+            </div>
+          </div>
+
+          <div class="kpi-card">
+            <div class="kpi-icon icon-rev">🚚</div>
+            <div class="kpi-details">
+              <span class="kpi-label">Dispatched to Store</span>
+              <span class="kpi-value" id="kpi-indent-dispatched">16 SKUs</span>
+              <span class="kpi-trend positive">In Transit Vans</span>
+            </div>
+          </div>
+
+          <div class="kpi-card">
+            <div class="kpi-icon icon-event">⚠️</div>
+            <div class="kpi-details">
+              <span class="kpi-label">Stockout Risk Level</span>
+              <span class="kpi-value" id="kpi-indent-risk">Low (1 SKU)</span>
+              <span class="kpi-trend neutral">Rusk safety buffer intact</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- Indent Grid Table -->
+        <section class="table-section">
+          <div class="table-header">
+            <div class="table-title-area">
+              <h2 class="table-title">Branch Daily Requisitions & Store Safety Buffers</h2>
+              <span class="table-subtitle">Adjust final requested quantities and approve logistics releases</span>
+            </div>
+            <div class="table-actions">
+              <span class="showing-count" id="indent-count-text">Showing active branch indents</span>
+            </div>
+          </div>
+
+          <div class="table-wrapper">
+            <table class="forecast-table">
+              <thead>
+                <tr>
+                  <th>SKU Information</th>
+                  <th>Category</th>
+                  <th>Shelf Stock</th>
+                  <th>Safety Min</th>
+                  <th>AI P50 Demand</th>
+                  <th>Suggested Indent</th>
+                  <th>Approved Qty</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="indent-table-body">
+                <!-- Dynamically populated -->
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <!-- VIEW 3: CENTRAL KITCHEN BAKE PLAN -->
+      <section id="view-production" class="view-panel hidden">
+        <section class="filter-section">
+          <div class="filter-group">
+            <label for="select-bake-shift">Baking Shift:</label>
+            <select id="select-bake-shift" class="custom-select">
+              <option value="Morning">Morning Shift (04:00 - 12:00 PKT)</option>
+              <option value="Afternoon">Afternoon Shift (12:00 - 20:00 PKT)</option>
+              <option value="Night">Night Shift (20:00 - 04:00 PKT)</option>
+            </select>
+          </div>
+
+          <div class="filter-group">
+            <label for="select-bake-station">Oven / Equipment:</label>
+            <select id="select-bake-station" class="custom-select">
+              <option value="ALL">All Stations (4 Ovens + 2 Lines)</option>
+              <option value="Deck Oven A">Deck Oven A (Stone Hearth)</option>
+              <option value="Deck Oven B">Deck Oven B (High Heat)</option>
+              <option value="Rotary Rack 1">Rotary Rack 1 (Volume Loaves)</option>
+              <option value="Convection Line 2">Convection Line 2 (Pastry)</option>
+            </select>
+          </div>
+
+          <button class="btn-action btn-accent" id="btn-add-urgent-batch">Schedule Emergency Batch</button>
+          <button class="btn-action" id="btn-export-bake-plan">Print Bake Sheet (CSV)</button>
+        </section>
+
+        <!-- KPI Summary Cards -->
+        <section class="kpi-grid">
+          <div class="kpi-card">
+            <div class="kpi-icon icon-units">🔥</div>
+            <div class="kpi-details">
+              <span class="kpi-label">Scheduled Batches</span>
+              <span class="kpi-value" id="kpi-bake-batches">28 Batches</span>
+              <span class="kpi-trend positive">7,150 Total Loaves/PCS</span>
+            </div>
+          </div>
+
+          <div class="kpi-card">
+            <div class="kpi-icon icon-conf">⚡</div>
+            <div class="kpi-details">
+              <span class="kpi-label">Commercial Oven Capacity</span>
+              <span class="kpi-value" id="kpi-bake-load">82.5% Utilization</span>
+              <div class="capacity-meter-box" style="margin-top:4px;">
+                <div class="capacity-meter-bar">
+                  <div class="capacity-meter-fill" style="width: 82.5%;"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="kpi-card">
+            <div class="kpi-icon icon-event">⏲️</div>
+            <div class="kpi-details">
+              <span class="kpi-label">Current Baking Shift</span>
+              <span class="kpi-value" id="kpi-current-shift-name">Morning Shift</span>
+              <span class="kpi-trend highlight">04:00 - 12:00 PKT</span>
+            </div>
+          </div>
+
+          <div class="kpi-card">
+            <div class="kpi-icon icon-rev">✅</div>
+            <div class="kpi-details">
+              <span class="kpi-label">Ready for Store Delivery</span>
+              <span class="kpi-value" id="kpi-bake-ready">12 Batches</span>
+              <span class="kpi-trend positive">Cooled & Trayed</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- Production Schedule Table -->
+        <section class="table-section">
+          <div class="table-header">
+            <div class="table-title-area">
+              <h2 class="table-title">Central Kitchen Master Baking Schedule</h2>
+              <span class="table-subtitle">Consolidated branch demand, batch counts, oven loading, and stage workflow</span>
+            </div>
+            <div class="table-actions">
+              <span class="showing-count" id="bake-count-text">Showing 10 scheduled production batches</span>
+            </div>
+          </div>
+
+          <div class="table-wrapper">
+            <table class="forecast-table">
+              <thead>
+                <tr>
+                  <th>Batch Code</th>
+                  <th>Product Name</th>
+                  <th>Category</th>
+                  <th>Consolidated Demand</th>
+                  <th>Batch Size</th>
+                  <th>Batches Required</th>
+                  <th>Assigned Station</th>
+                  <th>Temp & Time</th>
+                  <th>Current Stage</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="bake-table-body">
+                <!-- Dynamically populated -->
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <!-- VIEW 4: PURCHASE REQUIREMENTS -->
+      <section id="view-purchase" class="view-panel hidden">
+        <section class="filter-section">
+          <div class="filter-group">
+            <label for="select-purchase-filter">Material Urgency:</label>
+            <select id="select-purchase-filter" class="custom-select">
+              <option value="ALL">All Ingredients (BOM Explosion)</option>
+              <option value="SHORTAGE">Critical Shortages Only</option>
+              <option value="REORDER">Reorder Required</option>
+              <option value="ADEQUATE">Adequate Stock</option>
+            </select>
+          </div>
+
+          <button class="btn-action btn-accent" id="btn-generate-po-all">Issue All Required POs</button>
+          <button class="btn-action" id="btn-export-purchase">Export BOM Requisition (CSV)</button>
+        </section>
+
+        <!-- KPI Summary Cards -->
+        <section class="kpi-grid">
+          <div class="kpi-card">
+            <div class="kpi-icon icon-event">⚠️</div>
+            <div class="kpi-details">
+              <span class="kpi-label">Critical Shortage Items</span>
+              <span class="kpi-value" id="kpi-purchase-shortages" style="color:var(--accent-rose);">3 Materials</span>
+              <span class="kpi-trend highlight">Flour & Ghee reorder needed</span>
+            </div>
+          </div>
+
+          <div class="kpi-card">
+            <div class="kpi-icon icon-units">📑</div>
+            <div class="kpi-details">
+              <span class="kpi-label">Open Purchase Orders</span>
+              <span class="kpi-value" id="kpi-purchase-open-pos">5 Active POs</span>
+              <span class="kpi-trend positive">Awaiting Vendor Delivery</span>
+            </div>
+          </div>
+
+          <div class="kpi-card">
+            <div class="kpi-icon icon-rev">₨</div>
+            <div class="kpi-details">
+              <span class="kpi-label">Est. Requisition Value</span>
+              <span class="kpi-value" id="kpi-purchase-total-cost">Rs 1,485,000.00</span>
+              <span class="kpi-trend neutral">7-Day Production Run</span>
+            </div>
+          </div>
+
+          <div class="kpi-card">
+            <div class="kpi-icon icon-conf">🛡️</div>
+            <div class="kpi-details">
+              <span class="kpi-label">Warehouse Safety Stock</span>
+              <span class="kpi-value">4.5 Days</span>
+              <span class="kpi-trend positive">Average buffer coverage</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- Purchase Table -->
+        <section class="table-section">
+          <div class="table-header">
+            <div class="table-title-area">
+              <h2 class="table-title">Raw Material Requisitions & Bill-of-Materials Explosion</h2>
+              <span class="table-subtitle">Derived dynamically from central baking schedule to ensure continuous operation</span>
+            </div>
+            <div class="table-actions">
+              <span class="showing-count" id="purchase-count-text">Showing 8 primary baking ingredients</span>
+            </div>
+          </div>
+
+          <div class="table-wrapper">
+            <table class="forecast-table">
+              <thead>
+                <tr>
+                  <th>Raw Material</th>
+                  <th>Category</th>
+                  <th>Required for Plan</th>
+                  <th>Warehouse Stock</th>
+                  <th>Net Shortfall</th>
+                  <th>Unit Rate (PKR)</th>
+                  <th>Total Cost</th>
+                  <th>Approved Supplier</th>
+                  <th>Status</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="purchase-table-body">
+                <!-- Dynamically populated -->
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <!-- Manual Override Modal -->
+  <div class="modal-backdrop hidden" id="override-modal">
+    <div class="modal-dialog" id="modal-dialog-inner">
+      <div class="modal-header">
+        <h3 class="modal-title">Manual Forecast Override</h3>
+        <button class="modal-close" id="btn-close-modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-desc">
+          Auditable human override with mandatory reason codes. All adjustments are logged for forecast accuracy reporting.
+        </p>
+        <div class="override-field">
+          <span class="field-label">Target SKU:</span>
+          <span class="field-value" id="modal-sku-name">Plain White Bread</span>
+        </div>
+        <div class="override-field">
+          <span class="field-label">System P50 Recommendation:</span>
+          <span class="field-value highlight" id="modal-p50-val">24 PCS</span>
+        </div>
+        <div class="override-field input-field">
+          <label for="override-qty">New Override Quantity (PCS):</label>
+          <input type="number" id="override-qty" class="custom-input" min="1" max="5000">
+        </div>
+        <div class="override-field input-field">
+          <label for="override-reason">Mandatory Reason Code:</label>
+          <select id="override-reason" class="custom-select">
+            <option value="Local Event">Local Event / Procession</option>
+            <option value="Known Bulk Order">Known Bulk / Catering Order</option>
+            <option value="Supply Constraint">Flour/Ingredient Supply Constraint</option>
+            <option value="Weather">Severe Weather / Heat Wave</option>
+            <option value="Other">Other (Specify in notes)</option>
+          </select>
+        </div>
+        <div class="override-field input-field">
+          <label for="override-notes">Audit Notes / Justification:</label>
+          <textarea id="override-notes" class="custom-textarea" placeholder="Provide operational context for compliance..."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-danger hidden" id="btn-revert-override">Revert Override</button>
+        <button class="btn-secondary" id="btn-cancel-override">Cancel</button>
+        <button class="btn-primary" id="btn-save-override">Confirm & Sign Override</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Stack -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

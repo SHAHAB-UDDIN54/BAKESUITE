@@ -1,0 +1,29 @@
+{
+  "name": "@bakesuite/erp-core",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "BakeSuite ERP Core Service - Master Transactional Engine",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc && node dist/index.js",
+    "test": "tsc && node dist/test-verify.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "pg": "^8.13.3",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/node": "^20.17.19",
+    "@types/pg": "^8.11.11",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.7.3"
+  }
+}
