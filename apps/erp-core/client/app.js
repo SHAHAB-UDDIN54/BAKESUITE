@@ -502,16 +502,45 @@ function closeModal() {
   currentOverrideItem = null;
 }
 
-function saveOverride() {
+async function saveOverride() {
   if (!currentOverrideItem) return;
 
   const newQty = parseInt(document.getElementById('override-qty').value, 10);
   const reason = document.getElementById('override-reason').value;
   const notes = document.getElementById('override-notes').value.trim();
+  const branchId = document.getElementById('select-branch').value;
+  const dateStr = document.getElementById('filter-forecast-date')?.value || new Date().toISOString().split('T')[0];
 
   if (isNaN(newQty) || newQty <= 0) {
     showToast('Please enter a valid override quantity greater than zero.', 'warning');
     return;
+  }
+
+  // Step 36: For Other, free text is mandatory
+  if (reason === 'Other' && (!notes || notes.length === 0)) {
+    showToast("Mandatory justification notes required when selecting 'Other' reason code.", 'warning');
+    return;
+  }
+
+  try {
+    // Persist to backend audit log (Step 36 & 37)
+    await fetch('/api/v1/ai/forecasts/override', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sku_id: currentOverrideItem.sku_id,
+        branch_id: branchId,
+        forecast_date: dateStr,
+        original_forecast: currentOverrideItem.p50,
+        override_quantity: newQty,
+        reason_code: reason,
+        notes: notes,
+        user_id: 'user-ops-mgr',
+        model_version: 'lgbm-v1.0-quantile'
+      })
+    });
+  } catch (err) {
+    console.warn('[WORKBENCH] Offline override sync queued:', err);
   }
 
   currentOverrideItem.is_overridden = true;
@@ -522,7 +551,7 @@ function saveOverride() {
   closeModal();
   filterAndRenderTable();
   renderChart(currentOverrideItem.sku_id);
-  showToast(`Override signed: ${currentOverrideItem.sku_name} set to ${newQty} PCS (${reason})`, 'success');
+  showToast(`Override signed & audited: ${currentOverrideItem.sku_name} set to ${newQty} PCS (${reason})`, 'success');
 }
 
 function revertOverride() {

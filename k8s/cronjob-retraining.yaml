@@ -1,0 +1,49 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: bakesuite-ai01-weekly-retraining
+  namespace: bakesuite
+  labels:
+    app.kubernetes.io/name: ai01-retraining
+    app.kubernetes.io/part-of: bakesuite-erp
+spec:
+  # Sunday 03:00 AM Asia/Karachi (UTC+5)
+  timeZone: "Asia/Karachi"
+  schedule: "0 3 * * 0"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 4
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: ai01-retraining-job
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: model-retrainer
+              image: bakesuite-ml-service:1.0.0
+              imagePullPolicy: IfNotPresent
+              command:
+                - "python"
+                - "-m"
+                - "app.training.train_pipeline"
+              env:
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: bakesuite-secrets
+                      key: database-url
+                - name: REDIS_URL
+                  value: "redis://bakesuite-redis:6379/0"
+                - name: MLFLOW_TRACKING_URI
+                  value: "http://mlflow:5000"
+              resources:
+                requests:
+                  cpu: "1000m"
+                  memory: "2Gi"
+                limits:
+                  cpu: "4000m"
+                  memory: "8Gi"

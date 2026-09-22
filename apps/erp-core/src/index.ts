@@ -4,6 +4,7 @@ import { config } from './config/index.js';
 import { healthRouter } from './routes/health.js';
 import { extractsRouter } from './routes/extracts.js';
 import { forecastsRouter } from './routes/forecasts.js';
+import { overridesRouter } from './routes/overrides.js';
 import { testDatabaseConnection } from './db/index.js';
 
 const app = express();
@@ -15,6 +16,7 @@ app.use(express.json());
 app.use('/api/v1', healthRouter);
 app.use('/api/v1/ai/extracts', extractsRouter);
 app.use('/api/v1/ai', forecastsRouter);
+app.use('/api/v1/ai', overridesRouter);
 
 import path from 'path';
 import { fileURLToPath } from 'url';

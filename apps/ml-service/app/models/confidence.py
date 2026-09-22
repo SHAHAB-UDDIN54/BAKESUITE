@@ -10,11 +10,13 @@ def compute_confidence_score(
     p50: float,
     p90: float,
     non_censored_days_180: int,
-    is_cold_start: bool = False
+    is_cold_start: bool = False,
+    weather_available: bool = True
 ) -> Dict[str, Any]:
     """
     Computes confidence score in [0.00, 1.00] as:
     Dispersion Factor x Sufficiency Factor
+    If weather feed is unavailable, applies a 0.95 multiplier (Step 28).
     """
     # Guard against zero or negative p50
     if p50 <= 0:
@@ -30,16 +32,24 @@ def compute_confidence_score(
     # Raw score
     raw_score = round(dispersion_factor * sufficiency_factor, 4)
 
-    # Cold start cap: capped at 0.45 regardless of computed value (AC-5)
+    # Cold start cap: capped at 0.45 regardless of computed value (AC-5 / Step 31)
     if is_cold_start:
-        final_score = min(0.45, raw_score)
+        base_score = min(0.45, raw_score)
         limiting_factor = "Cold-Start Launch Period (<28 days history)"
     else:
-        final_score = raw_score
+        base_score = raw_score
         if dispersion_factor < sufficiency_factor:
             limiting_factor = "High Predictive Uncertainty / Wide Quantile Spread"
         else:
             limiting_factor = "Limited Historical Observations"
+
+    # Step 28: Weather confidence adjustment (0.95 multiplier if weather unavailable)
+    if not weather_available:
+        final_score = round(base_score * 0.95, 4)
+        if limiting_factor is None or limiting_factor == "":
+            limiting_factor = "Degraded Weather Input (Seasonal Imputation)"
+    else:
+        final_score = base_score
 
     # Display Bands:
     # High: >= 0.75 (green)
@@ -60,6 +70,7 @@ def compute_confidence_score(
         "confidence_band": confidence_band,
         "dispersion_factor": round(dispersion_factor, 4),
         "sufficiency_factor": round(sufficiency_factor, 4),
+        "weather_adjustment_applied": not weather_available,
         "auto_action_allowed": auto_action_allowed,
         "limiting_factor": limiting_factor if final_score < 0.75 else None
     }

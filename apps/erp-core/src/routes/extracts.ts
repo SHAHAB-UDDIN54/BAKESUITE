@@ -60,7 +60,7 @@ extractsRouter.get('/invoices', async (req: Request, res: Response) => {
 extractsRouter.get('/products', async (req: Request, res: Response) => {
   try {
     const { rows } = await pool.query(`
-      SELECT sku_id, sku_name, category_id, shelf_life_hours, base_price, status
+      SELECT sku_id, sku_name, category_id, shelf_life_hours, base_price, status, launch_date
       FROM public.products
       ORDER BY sku_id ASC;
     `);
@@ -113,5 +113,70 @@ extractsRouter.get('/prices', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('[EXTRACTS] Prices extract error:', error);
     res.status(500).json({ error: 'Failed to extract price lists' });
+  }
+});
+
+// 5. Active Promotions & Redemptions Extract
+extractsRouter.get('/promotions', async (req: Request, res: Response) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT p.promotion_id, p.sku_id, p.branch_id, p.discount_percent, p.start_date, p.end_date,
+             COALESCE(SUM(r.quantity_redeemed), 0) as total_redemptions
+      FROM public.promotions p
+      LEFT JOIN public.promotion_redemptions r ON p.promotion_id = r.promotion_id
+      GROUP BY p.promotion_id, p.sku_id, p.branch_id, p.discount_percent, p.start_date, p.end_date
+      ORDER BY p.start_date DESC;
+    `);
+
+    res.setHeader('Content-Type', 'application/x-ndjson');
+    for (const row of rows) {
+      res.write(JSON.stringify(row) + '\n');
+    }
+    res.end();
+  } catch (error) {
+    console.error('[EXTRACTS] Promotions extract error:', error);
+    res.status(500).json({ error: 'Failed to extract promotions' });
+  }
+});
+
+// 6. Stock Movements & Inventory Extract
+extractsRouter.get('/stock-movements', async (req: Request, res: Response) => {
+  const limit = Math.min(parseInt(req.query.limit as string || '5000', 10), 50000);
+  try {
+    const { rows } = await pool.query(`
+      SELECT movement_id, sku_id, branch_id, movement_date, on_hand_close, stockout_minutes
+      FROM public.stock_movements
+      ORDER BY movement_date DESC, movement_id DESC
+      LIMIT $1;
+    `, [limit]);
+
+    res.setHeader('Content-Type', 'application/x-ndjson');
+    for (const row of rows) {
+      res.write(JSON.stringify(row) + '\n');
+    }
+    res.end();
+  } catch (error) {
+    console.error('[EXTRACTS] Stock movements extract error:', error);
+    res.status(500).json({ error: 'Failed to extract stock movements' });
+  }
+});
+
+// 7. Waste & Shrinkage Records Extract
+extractsRouter.get('/waste-records', async (req: Request, res: Response) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT waste_id, sku_id, branch_id, waste_date, waste_quantity, reason_code
+      FROM public.waste_records
+      ORDER BY waste_date DESC;
+    `);
+
+    res.setHeader('Content-Type', 'application/x-ndjson');
+    for (const row of rows) {
+      res.write(JSON.stringify(row) + '\n');
+    }
+    res.end();
+  } catch (error) {
+    console.error('[EXTRACTS] Waste records extract error:', error);
+    res.status(500).json({ error: 'Failed to extract waste records' });
   }
 });

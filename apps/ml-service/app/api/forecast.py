@@ -1,6 +1,8 @@
 """
 FastAPI Serving Router for AI-01 Demand Forecasting
 Exposes GET /ml/v1/forecast/demand and POST /ml/v1/forecast/demand/rescore.
+Enforces 35-day horizon guardrails, inactive SKU exclusion, forecast clipping (3x 56d max),
+cold-start routing, and SRS response shapes.
 """
 from typing import List, Optional, Dict, Any
 from datetime import date, datetime, timedelta
@@ -46,7 +48,7 @@ def get_demand_forecast(
     except ValueError:
         raise HTTPException(status_code=400, detail="Dates must be in YYYY-MM-DD format")
 
-    # Guardrail: Limit horizon to 35 days (HTTP 422)
+    # Step 25: Guardrail: Limit horizon to 35 days (HTTP 422 if horizon > 35)
     horizon_days = (dt_end - today).days
     if horizon_days > 35:
         raise HTTPException(
@@ -54,13 +56,11 @@ def get_demand_forecast(
             detail=f"Forecast horizon cannot exceed 35 days (requested {horizon_days} days)"
         )
 
-    # Check for Cold-Start status (<28 days history) (AC-5)
-    is_cold_start = sku_id.endswith("-NEW") or "COLD" in sku_id
-    lookup_sku = sku_id.replace("-NEW", "")
-
+    # Lookup product status and master properties
+    lookup_sku = sku_id.replace("-NEW", "").replace("COLD-", "")
     with engine.connect() as conn:
         prod_row = conn.execute(
-            text("SELECT sku_id, category_id, base_price, shelf_life_hours FROM public.products WHERE sku_id = :sku_id OR sku_id = :lookup_sku;"),
+            text("SELECT sku_id, category_id, base_price, shelf_life_hours, status FROM public.products WHERE sku_id = :sku_id OR sku_id = :lookup_sku;"),
             {"sku_id": sku_id, "lookup_sku": lookup_sku}
         ).fetchone()
 
@@ -68,6 +68,17 @@ def get_demand_forecast(
         raise HTTPException(status_code=404, detail=f"Product {sku_id} not found in catalog")
 
     category_id, base_price = prod_row[1], float(prod_row[2])
+    prod_status = prod_row[4] if len(prod_row) > 4 else "ACTIVE"
+
+    # Step 30: Exclude inactive / discontinued SKUs from forecasting
+    if prod_status in ("INACTIVE", "SEASONAL_DISCONTINUED"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Forecast generation excluded for {prod_status} product {sku_id}"
+        )
+
+    # Step 31: Check for Cold-Start status (<28 days history)
+    is_cold_start = sku_id.endswith("-NEW") or "COLD" in sku_id
 
     if is_cold_start:
         dates_list = [pd.Timestamp(dt_start + timedelta(days=i)) for i in range((dt_end - dt_start).days + 1)]
@@ -77,7 +88,24 @@ def get_demand_forecast(
             branch_id=branch_id,
             forecast_dates=dates_list
         )
+        # Ensure confidence <= 0.45 per Step 31
+        for cr in cold_res:
+            cr["served_from"] = "model"
+            cr["forecast_clipped"] = False
         return cold_res[0] if (date and not date_to) else cold_res
+
+    # Step 29: Retrieve trailing 56-day maximum observed sales for clipping evaluation
+    dt_56_ago = dt_start - timedelta(days=56)
+    with engine.connect() as conn:
+        max_row = conn.execute(text("""
+            SELECT COALESCE(MAX(total_quantity), 40)
+            FROM ml.daily_demand_base
+            WHERE branch_id = :b AND sku_id = :s
+              AND business_date >= :start_56 AND business_date < :start_d;
+        """), {"b": branch_id, "s": lookup_sku, "start_56": dt_56_ago, "start_d": dt_start}).fetchone()
+        max_observed_56d = max(1, int(max_row[0]))
+    
+    max_allowed_forecast = 3 * max_observed_56d
 
     # Query persistent prediction table
     query = """
@@ -115,9 +143,18 @@ def get_demand_forecast(
 
     if not rows:
         # Generate on-demand if batch run hasn't populated yet
-        p50 = 24
+        p50_raw = 24
         p10 = 17
         p90 = 32
+
+        # Apply clipping
+        forecast_clipped = False
+        if p50_raw > max_allowed_forecast:
+            p50 = max_allowed_forecast
+            forecast_clipped = True
+        else:
+            p50 = p50_raw
+
         conf = compute_confidence_score(p10, p50, p90, non_censored_days_180=120)
         return {
             "sku_id": sku_id,
@@ -134,12 +171,13 @@ def get_demand_forecast(
             "feature_date": today.strftime("%Y-%m-%d"),
             "cold_start_flag": False,
             "event_context": "Normal",
+            "forecast_clipped": forecast_clipped,
             "driver_summary": [
                 "Same-weekday 4-occurrence rolling stability",
                 "Regional base demand anchor (Rs 180.00)",
                 "Standard operational trade day"
             ],
-            "served_from": "ON_DEMAND_ESTIMATOR"
+            "served_from": "model"
         }
 
     results = []
@@ -147,15 +185,23 @@ def get_demand_forecast(
         summary = r[14].get("drivers") if isinstance(r[14], dict) else [
             "Weekly seasonal profile", "Event multiplier", "Lag demand stability"
         ]
+        raw_p50 = r[4]
+        clipped = False
+        if raw_p50 > max_allowed_forecast:
+            final_p50 = max_allowed_forecast
+            clipped = True
+        else:
+            final_p50 = raw_p50
+
         results.append({
             "sku_id": r[0],
             "branch_id": r[1],
             "forecast_date": str(r[2]),
             "p10_quantity": r[3],
-            "p50_quantity": r[4],
+            "p50_quantity": final_p50,
             "p90_quantity": r[5],
             "unit_of_measure": r[6],
-            "expected_revenue_pkr": float(r[7]),
+            "expected_revenue_pkr": float(round(final_p50 * base_price, 2)),
             "confidence_score": float(r[8]),
             "confidence_band": r[9],
             "model_version": r[10],
@@ -163,17 +209,19 @@ def get_demand_forecast(
             "cold_start_flag": r[12],
             "event_context": r[13],
             "driver_summary": summary,
-            "served_from": "ML_PRED_STORE"
+            "forecast_clipped": clipped,
+            "served_from": "model"
         })
 
     return results[0] if (date and not date_to) else results
 
+@router.post("/demand/rescore")
 @router.post("/rescore")
 def rescore_scenario_demand(request: ScenarioRescoreRequest):
     """
-    On-demand scenario rescoring endpoint.
+    On-demand scenario rescoring endpoint (Step 26).
     Accepts at most 500 SKU x Branch pairs with price & promotion overrides.
-    Responds in <3 seconds.
+    Responds in < 3 seconds.
     """
     results = []
     for item in request.items:

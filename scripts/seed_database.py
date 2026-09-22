@@ -130,10 +130,12 @@ def setup_schema_ddl(conn):
             category_id VARCHAR(32) NOT NULL,
             shelf_life_hours INT NOT NULL,
             base_price NUMERIC(10,2) NOT NULL,
+            launch_date DATE NOT NULL DEFAULT '2023-01-01',
             status VARCHAR(16) DEFAULT 'ACTIVE',
             created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         );
+        ALTER TABLE public.products ADD COLUMN IF NOT EXISTS launch_date DATE DEFAULT '2023-01-01';
 
         CREATE TABLE IF NOT EXISTS public.price_lists (
             id SERIAL PRIMARY KEY,
@@ -141,6 +143,48 @@ def setup_schema_ddl(conn):
             branch_id VARCHAR(32) REFERENCES public.branches(branch_id),
             effective_price NUMERIC(10,2) NOT NULL,
             effective_from DATE NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS public.promotions (
+            promotion_id VARCHAR(64) PRIMARY KEY,
+            sku_id VARCHAR(32) REFERENCES public.products(sku_id),
+            branch_id VARCHAR(32) REFERENCES public.branches(branch_id),
+            discount_percent NUMERIC(5,2) NOT NULL,
+            start_date DATE NOT NULL,
+            end_date DATE NOT NULL,
+            promotion_type VARCHAR(32) DEFAULT 'PERCENTAGE_DISCOUNT',
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS public.promotion_redemptions (
+            redemption_id BIGSERIAL PRIMARY KEY,
+            promotion_id VARCHAR(64) REFERENCES public.promotions(promotion_id),
+            sku_id VARCHAR(32) REFERENCES public.products(sku_id),
+            branch_id VARCHAR(32) REFERENCES public.branches(branch_id),
+            redemption_date DATE NOT NULL,
+            quantity_redeemed INT NOT NULL DEFAULT 1,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS public.stock_movements (
+            movement_id BIGSERIAL PRIMARY KEY,
+            sku_id VARCHAR(32) REFERENCES public.products(sku_id),
+            branch_id VARCHAR(32) REFERENCES public.branches(branch_id),
+            movement_date DATE NOT NULL,
+            on_hand_close INT NOT NULL,
+            stockout_minutes INT NOT NULL DEFAULT 0,
+            partial_day_flag BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS public.waste_records (
+            waste_id BIGSERIAL PRIMARY KEY,
+            sku_id VARCHAR(32) REFERENCES public.products(sku_id),
+            branch_id VARCHAR(32) REFERENCES public.branches(branch_id),
+            waste_date DATE NOT NULL,
+            waste_quantity INT NOT NULL,
+            reason_code VARCHAR(32) NOT NULL,
             created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         );
 
@@ -168,6 +212,16 @@ def setup_schema_ddl(conn):
             discount_amount NUMERIC(12,2) DEFAULT 0.00,
             created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS ml.weather_daily (
+            branch_city VARCHAR(64) NOT NULL,
+            weather_date DATE NOT NULL,
+            max_temp_c NUMERIC(4,1) NOT NULL,
+            rainfall_mm NUMERIC(5,1) NOT NULL DEFAULT 0.0,
+            humidity_percent NUMERIC(4,1) NOT NULL,
+            heat_wave_flag BOOLEAN DEFAULT FALSE,
+            PRIMARY KEY (branch_city, weather_date)
         );
 
         -- 2. ML schema - Calendar Dimension and Daily Demand Base
@@ -260,22 +314,120 @@ def seed_master_data(conn):
             VALUES %s ON CONFLICT (sku_id) DO NOTHING;
         """, prod_rows)
 
-        # Price Lists
+        # Price Lists (18+ months historical depth across 2 revisions)
         price_rows = []
         for p in PRODUCT_CATALOG:
             for b in BRANCHES:
                 # Slight regional variance (Karachi/Islamabad +5% premium over Lahore)
                 mult = 1.05 if b[2] in ("Karachi", "Islamabad") else 1.0
                 effective_p = round(p[4] * mult, 2)
-                price_rows.append((p[0], b[0], effective_p, date(2016, 1, 1)))
+                price_rows.append((p[0], b[0], effective_p, date(2024, 1, 1)))
+                price_rows.append((p[0], b[0], round(effective_p * 1.15, 2), date(2025, 9, 1)))
 
         execute_values(cur, """
             INSERT INTO public.price_lists (sku_id, branch_id, effective_price, effective_from)
-            VALUES %s ON CONFLICT DO NOTHING;
+            VALUES %s;
         """, price_rows)
 
+        # 4. Promotions & Redemptions (18+ months history)
+        promotions_list = [
+            ("PROMO-RAM-24", "SKU-BRD-05", "BR-KHI-01", 15.0, date(2024, 3, 10), date(2024, 4, 10), "RAMADAN_DISCOUNT"),
+            ("PROMO-EID-24", "SKU-CAK-01", "BR-KHI-01", 20.0, date(2024, 4, 8), date(2024, 4, 15), "EID_SPECIAL"),
+            ("PROMO-WKD-24", "SKU-SAV-01", "BR-LHR-01", 10.0, date(2024, 5, 1), date(2024, 8, 31), "WEEKEND_SAVORY"),
+            ("PROMO-TEA-24", "SKU-SWT-01", "BR-ISB-01", 12.5, date(2024, 6, 1), date(2024, 9, 30), "TEA_TIME_BUNDLE"),
+            ("PROMO-RAM-25", "SKU-BRD-05", "BR-KHI-01", 15.0, date(2025, 2, 28), date(2025, 3, 30), "RAMADAN_DISCOUNT"),
+            ("PROMO-EID-25", "SKU-CAK-01", "BR-LHR-01", 20.0, date(2025, 3, 29), date(2025, 4, 5), "EID_SPECIAL"),
+            ("PROMO-BRD-25", "SKU-BRD-01", "BR-KHI-01", 10.0, date(2025, 1, 1), date(2025, 12, 31), "EVERYDAY_VALUE"),
+            ("PROMO-RAM-26", "SKU-BRD-05", "BR-KHI-01", 15.0, date(2026, 2, 18), date(2026, 3, 20), "RAMADAN_DISCOUNT"),
+            ("PROMO-EID-26", "SKU-CAK-02", "BR-ISB-01", 25.0, date(2026, 3, 19), date(2026, 3, 25), "CHAND_RAAT_FESTIVAL"),
+        ]
+        execute_values(cur, """
+            INSERT INTO public.promotions (promotion_id, sku_id, branch_id, discount_percent, start_date, end_date, promotion_type)
+            VALUES %s ON CONFLICT (promotion_id) DO NOTHING;
+        """, promotions_list)
+
+        redemptions_rows = []
+        for p in promotions_list:
+            cur_d = p[4]
+            while cur_d <= p[5]:
+                redemptions_rows.append((p[0], p[1], p[2], cur_d, random.randint(5, 45)))
+                cur_d += timedelta(days=2)
+        
+        execute_values(cur, """
+            INSERT INTO public.promotion_redemptions (promotion_id, sku_id, branch_id, redemption_date, quantity_redeemed)
+            VALUES %s ON CONFLICT DO NOTHING;
+        """, redemptions_rows)
+
+        # 5. Stock Movements & Waste Records (Daily for key SKUs across 2024-2026)
+        stock_rows = []
+        waste_rows = []
+        hist_start = date(2024, 1, 1)
+        hist_end = date(2026, 9, 20)
+        curr_dt = hist_start
+
+        while curr_dt <= hist_end:
+            dow = curr_dt.weekday()
+            for b in BRANCHES:
+                for p in PRODUCT_CATALOG[:12]: # Representative cross-category SKUs
+                    on_hand = random.randint(15, 80)
+                    stockout_mins = 0
+                    # Occasional stockout (>60min on Sunday evenings for censoring testing)
+                    if dow == 6 and random.random() < 0.15:
+                        stockout_mins = random.randint(75, 180)
+                        on_hand = 0
+                    stock_rows.append((p[0], b[0], curr_dt, on_hand, stockout_mins, stockout_mins > 0))
+
+                    if random.random() < 0.30:
+                        waste_qty = random.randint(1, 6)
+                        reason = "EXPIRED" if p[3] <= 48 else ("DAMAGED" if random.random() < 0.5 else "OVERBAKE")
+                        waste_rows.append((p[0], b[0], curr_dt, waste_qty, reason))
+            curr_dt += timedelta(days=1)
+
+        execute_values(cur, """
+            INSERT INTO public.stock_movements (sku_id, branch_id, movement_date, on_hand_close, stockout_minutes, partial_day_flag)
+            VALUES %s ON CONFLICT DO NOTHING;
+        """, stock_rows)
+
+        execute_values(cur, """
+            INSERT INTO public.waste_records (sku_id, branch_id, waste_date, waste_quantity, reason_code)
+            VALUES %s ON CONFLICT DO NOTHING;
+        """, waste_rows)
+
+        # 6. Weather Dimension (2023 through 2026 for Karachi, Lahore, Islamabad)
+        weather_rows = []
+        w_start = date(2023, 1, 1)
+        w_end = date(2026, 12, 31)
+        w_curr = w_start
+        cities = ["Karachi", "Lahore", "Islamabad"]
+
+        while w_curr <= w_end:
+            m = w_curr.month
+            for city in cities:
+                if city == "Karachi":
+                    base_t = 24.0 + 8.0 * math.sin((m - 1) * math.pi / 6.0)
+                    rain = 15.0 if m in (7, 8) and random.random() < 0.25 else 0.0
+                    hum = 65.0 + random.uniform(-10, 15)
+                elif city == "Lahore":
+                    base_t = 15.0 + 20.0 * math.sin((m - 1) * math.pi / 6.0)
+                    rain = 25.0 if m in (7, 8) and random.random() < 0.35 else 0.0
+                    hum = 50.0 + random.uniform(-15, 20)
+                else: # Islamabad
+                    base_t = 12.0 + 18.0 * math.sin((m - 1) * math.pi / 6.0)
+                    rain = 35.0 if m in (7, 8) and random.random() < 0.40 else 0.0
+                    hum = 55.0 + random.uniform(-15, 20)
+                
+                max_t = round(base_t + random.uniform(-2.5, 3.5), 1)
+                is_heat_wave = (max_t > 40.0)
+                weather_rows.append((city, w_curr, max_t, round(rain, 1), round(hum, 1), is_heat_wave))
+            w_curr += timedelta(days=1)
+
+        execute_values(cur, """
+            INSERT INTO ml.weather_daily (branch_city, weather_date, max_temp_c, rainfall_mm, humidity_percent, heat_wave_flag)
+            VALUES %s ON CONFLICT (branch_city, weather_date) DO NOTHING;
+        """, weather_rows)
+
         conn.commit()
-    print(f"  [OK] Seeded {len(BRANCHES)} branches and {len(PRODUCT_CATALOG)} products.")
+    print(f"  [OK] Seeded master data: {len(BRANCHES)} branches, {len(PRODUCT_CATALOG)} products, promotions, stock movements, and weather records.")
 
 def seed_transactions_and_demand(conn):
     print("[4/5] Preprocessing and enriching transaction dataset with Pakistani regional dynamics...")
@@ -428,9 +580,14 @@ def verify_seeding(conn):
             ("public.branches", "Branches"),
             ("public.products", "Products"),
             ("public.price_lists", "Price Lists"),
+            ("public.promotions", "Promotions"),
+            ("public.promotion_redemptions", "Promotion Redemptions"),
+            ("public.stock_movements", "Stock Movements"),
+            ("public.waste_records", "Waste Records"),
             ("public.pos_invoices", "Invoices"),
             ("public.pos_invoice_lines", "Invoice Lines"),
             ("ml.fg_calendar_day", "Calendar Days (Lunar + Greg)"),
+            ("ml.weather_daily", "Weather Feed (Multi-City)"),
             ("ml.daily_demand_base", "Aggregated Daily SKU Demand")
         ]
         for tbl, label in tables:
