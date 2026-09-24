@@ -8,9 +8,9 @@ if (!dbUrl.searchParams.has('options')) {
 
 export const pool = new Pool({
   connectionString: dbUrl.toString(),
-  max: 20,
+  max: 50,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
+  connectionTimeoutMillis: 10000,
 });
 
 export async function testDatabaseConnection(): Promise<boolean> {

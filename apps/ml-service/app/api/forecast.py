@@ -29,13 +29,14 @@ class ScenarioRescoreRequest(BaseModel):
 @router.get("/demand")
 def get_demand_forecast(
     branch_id: str = Query(default="BR-KHI-01"),
-    sku_id: str = Query(default="SKU-BRD-01"),
+    sku_id: Optional[str] = Query(default=None),
+    category_id: Optional[str] = Query(default=None),
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     date: Optional[str] = None
 ):
     """
-    Retrieves P10, P50, and P90 probabilistic demand forecast for a SKU and branch.
+    Retrieves P10, P50, and P90 probabilistic demand forecast for a SKU (or all branch SKUs) and branch.
     Enforces the 35-day forward horizon limit (HTTP 422 if exceeded).
     """
     today = datetime.now().date()
@@ -50,13 +51,85 @@ def get_demand_forecast(
 
     # Step 25: Guardrail: Limit horizon to 35 days (HTTP 422 if horizon > 35)
     horizon_days = (dt_end - today).days
-    if horizon_days > 35:
+    range_days = (dt_end - dt_start).days + 1
+    if horizon_days > 35 or range_days > 35:
+        max_h = max(horizon_days, range_days)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Forecast horizon cannot exceed 35 days (requested {horizon_days} days)"
+            detail=f"Forecast horizon cannot exceed 35 days (requested {max_h} days)"
         )
 
-    # Lookup product status and master properties
+    # Multi-SKU branch query when sku_id is omitted or 'ALL'
+    if not sku_id or sku_id == "ALL":
+        query = """
+        SELECT 
+            p.sku_id,
+            p.branch_id,
+            p.forecast_date,
+            p.p10_quantity,
+            p.p50_quantity,
+            p.p90_quantity,
+            p.unit_of_measure,
+            p.expected_revenue_pkr,
+            p.confidence_score,
+            p.confidence_band,
+            p.model_version,
+            p.feature_date,
+            p.cold_start_flag,
+            p.event_context,
+            p.driver_summary,
+            prod.sku_name,
+            prod.category_id,
+            prod.base_price
+        FROM ml.pred_demand_daily p
+        JOIN public.products prod ON p.sku_id = prod.sku_id
+        WHERE p.branch_id = :branch_id
+          AND p.forecast_date >= :dt_start
+          AND p.forecast_date <= :dt_end
+          AND prod.status = 'ACTIVE'
+        """
+        params = {"branch_id": branch_id, "dt_start": dt_start, "dt_end": dt_end}
+        if category_id and category_id != "ALL":
+            query += " AND prod.category_id = :category_id"
+            params["category_id"] = category_id
+        query += " ORDER BY p.forecast_date ASC, p.sku_id ASC;"
+
+        with engine.connect() as conn:
+            rows = conn.execute(text(query), params).fetchall()
+
+        results = []
+        for r in rows:
+            p10 = max(0, int(r[3]))
+            p50 = max(p10, int(r[4]))
+            p90 = max(p50, int(r[5]))
+            summary = r[14].get("drivers") if isinstance(r[14], dict) else [
+                "Weekly seasonal profile", "Event multiplier", "Lag demand stability"
+            ]
+            results.append({
+                "sku_id": r[0],
+                "sku_name": r[15],
+                "category_id": r[16],
+                "base_price": float(r[17]),
+                "branch_id": r[1],
+                "forecast_date": str(r[2]),
+                "p10_quantity": p10,
+                "p50_quantity": p50,
+                "p90_quantity": p90,
+                "unit_of_measure": r[6],
+                "expected_revenue_pkr": float(r[7]),
+                "confidence_score": float(r[8]),
+                "confidence_band": r[9],
+                "model_version": r[10],
+                "feature_date": str(r[11]),
+                "cold_start_flag": r[12],
+                "event_context": r[13],
+                "driver_summary": summary,
+                "forecast_clipped": False,
+                "served_from": "model"
+            })
+        return results
+
+    # Single SKU flow
     lookup_sku = sku_id.replace("-NEW", "").replace("COLD-", "")
     with engine.connect() as conn:
         prod_row = conn.execute(
@@ -88,10 +161,13 @@ def get_demand_forecast(
             branch_id=branch_id,
             forecast_dates=dates_list
         )
-        # Ensure confidence <= 0.45 per Step 31
+        # Ensure confidence <= 0.45 per Step 31 and monotonic ordering
         for cr in cold_res:
             cr["served_from"] = "model"
             cr["forecast_clipped"] = False
+            cr["p10_quantity"] = max(0, cr.get("p10_quantity", 0))
+            cr["p50_quantity"] = max(cr["p10_quantity"], cr.get("p50_quantity", 0))
+            cr["p90_quantity"] = max(cr["p50_quantity"], cr.get("p90_quantity", 0))
         return cold_res[0] if (date and not date_to) else cold_res
 
     # Step 29: Retrieve trailing 56-day maximum observed sales for clipping evaluation
@@ -154,6 +230,8 @@ def get_demand_forecast(
             forecast_clipped = True
         else:
             p50 = p50_raw
+        p10 = max(0, min(p10, p50))
+        p90 = max(p50, p90)
 
         conf = compute_confidence_score(p10, p50, p90, non_censored_days_180=120)
         return {
@@ -193,13 +271,16 @@ def get_demand_forecast(
         else:
             final_p50 = raw_p50
 
+        p10 = max(0, min(int(r[3]), final_p50))
+        p90 = max(final_p50, int(r[5]))
+
         results.append({
             "sku_id": r[0],
             "branch_id": r[1],
             "forecast_date": str(r[2]),
-            "p10_quantity": r[3],
+            "p10_quantity": p10,
             "p50_quantity": final_p50,
-            "p90_quantity": r[5],
+            "p90_quantity": p90,
             "unit_of_measure": r[6],
             "expected_revenue_pkr": float(round(final_p50 * base_price, 2)),
             "confidence_score": float(r[8]),

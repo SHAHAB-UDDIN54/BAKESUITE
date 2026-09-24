@@ -15,5 +15,6 @@ class Settings:
     USE_MOCK_CACHE: bool = os.getenv("USE_MOCK_CACHE", "true").lower() in ("true", "1", "yes")
     
     TIMEZONE: str = os.getenv("TIMEZONE", "Asia/Karachi")
+    ALLOWED_ORIGINS: list = [o.strip() for o in os.getenv("ML_ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000,http://localhost:8000").split(",") if o.strip()]
 
 settings = Settings()

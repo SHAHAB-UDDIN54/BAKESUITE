@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="./style.css">
 </head>
 <body>
   <div class="app-layout">
@@ -159,8 +159,8 @@
             <div class="kpi-icon icon-conf">🎯</div>
             <div class="kpi-details">
               <span class="kpi-label">High-Confidence Share</span>
-              <span class="kpi-value" id="kpi-high-conf">94.2%</span>
-              <span class="kpi-trend neutral">Auto-Action Eligible</span>
+              <span class="kpi-value" id="kpi-high-conf">--%</span>
+              <span class="kpi-trend neutral">Planning Review</span>
             </div>
           </div>
 
@@ -168,8 +168,8 @@
             <div class="kpi-icon icon-event">🌙</div>
             <div class="kpi-details">
               <span class="kpi-label">Governing Lunar Event</span>
-              <span class="kpi-value" id="kpi-lunar-event">Ramadan Pre-Season</span>
-              <span class="kpi-trend highlight">Sheermal/Rusk Surge</span>
+              <span class="kpi-value" id="kpi-lunar-event">Loading...</span>
+              <span class="kpi-trend highlight" id="kpi-lunar-sub">Calendar Tracked</span>
             </div>
           </div>
         </section>
@@ -200,7 +200,7 @@
               <span class="table-subtitle">Select any row to view chart. Use Override button for auditable manual adjustments</span>
             </div>
             <div class="table-actions">
-              <span class="showing-count" id="showing-text">Showing 32 active items</span>
+              <span class="showing-count" id="showing-text">Showing active items</span>
             </div>
           </div>
 
@@ -210,6 +210,7 @@
                 <tr>
                   <th>SKU Information</th>
                   <th>Category</th>
+                  <th>Forecast Date</th>
                   <th>P10 Lower</th>
                   <th>P50 Expected</th>
                   <th>P90 Upper</th>
@@ -230,6 +231,10 @@
 
       <!-- VIEW 2: BRANCH INDENT PLAN -->
       <section id="view-indent" class="view-panel hidden">
+        <div class="advisory-banner">
+          <span class="advisory-icon">ℹ️</span>
+          <span><strong>Advisory Planning View</strong>: Requisitions calculated from latest branch stock movements and AI P50 demand. Human review required prior to store dispatch.</span>
+        </div>
         <section class="filter-section">
           <div class="filter-group">
             <label for="select-indent-branch">Target Branch:</label>
@@ -335,6 +340,10 @@
 
       <!-- VIEW 3: CENTRAL KITCHEN BAKE PLAN -->
       <section id="view-production" class="view-panel hidden">
+        <div class="advisory-banner">
+          <span class="advisory-icon">⚠️</span>
+          <span><strong>Advisory Prototype View</strong>: Master Recipe/BOM & commercial deck/rotary oven equipment scheduling integration pending. Schedules are advisory planning models.</span>
+        </div>
         <section class="filter-section">
           <div class="filter-group">
             <label for="select-bake-shift">Baking Shift:</label>
@@ -441,6 +450,10 @@
 
       <!-- VIEW 4: PURCHASE REQUIREMENTS -->
       <section id="view-purchase" class="view-panel hidden">
+        <div class="advisory-banner">
+          <span class="advisory-icon">⚠️</span>
+          <span><strong>Advisory Prototype View</strong>: Central procurement ERP database integration pending. Automatic purchase order creation is disabled.</span>
+        </div>
         <section class="filter-section">
           <div class="filter-group">
             <label for="select-purchase-filter">Material Urgency:</label>
@@ -533,6 +546,22 @@
     </main>
   </div>
 
+  <!-- Forecast Diagnostic Details Drawer / Modal -->
+  <div class="modal-backdrop hidden" id="details-modal">
+    <div class="modal-dialog" id="details-modal-dialog">
+      <div class="modal-header">
+        <h3 class="modal-title">AI-01 Forecast Diagnostic Summary</h3>
+        <button class="modal-close" id="btn-close-details">&times;</button>
+      </div>
+      <div class="modal-body" id="details-modal-content">
+        <!-- Dynamically rendered diagnostic fields -->
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="btn-dismiss-details">Close</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Manual Override Modal -->
   <div class="modal-backdrop hidden" id="override-modal">
     <div class="modal-dialog" id="modal-dialog-inner">
@@ -583,6 +612,6 @@
   <div class="toast-container" id="toast-container"></div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-  <script src="/app.js"></script>
+  <script src="./app.js"></script>
 </body>
 </html>

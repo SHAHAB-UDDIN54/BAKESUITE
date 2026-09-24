@@ -53,6 +53,9 @@ overridesRouter.post('/forecasts/override', async (req: Request, res: Response) 
     user_id = 'user-mgr-01'
   } = req.body;
 
+  const authUser = (req.headers['x-user-id'] as string) || (req.headers['authorization'] ? 'authorized-user' : 'user-ops-mgr');
+  const userId = authUser;
+
   // 1. Validation
   if (!sku_id || !branch_id || !forecast_date) {
     return res.status(400).json({ error: 'sku_id, branch_id, and forecast_date are required' });
@@ -94,11 +97,11 @@ overridesRouter.post('/forecasts/override', async (req: Request, res: Response) 
       parseInt(override_quantity, 10),
       reason_code,
       notes || null,
-      user_id,
+      userId,
       modelVersion
     ]);
 
-    console.log(`[AUDIT-OVERRIDE] SKU: ${sku_id}, Branch: ${branch_id}, Date: ${forecast_date}, Orig: ${original_forecast}, Override: ${override_quantity}, User: ${user_id}, Reason: ${reason_code}`);
+    console.log(`[AUDIT-OVERRIDE] SKU: ${sku_id}, Branch: ${branch_id}, Date: ${forecast_date}, Orig: ${original_forecast}, Override: ${override_quantity}, User: ${userId}, Reason: ${reason_code}`);
 
     return res.status(201).json({
       status: 'OVERRIDE_RECORDED',
@@ -107,6 +110,71 @@ overridesRouter.post('/forecasts/override', async (req: Request, res: Response) 
   } catch (error) {
     console.error('[OVERRIDES] Error inserting override:', error);
     return res.status(500).json({ error: 'Failed to record manual forecast override' });
+  }
+});
+
+/**
+ * POST /api/v1/ai/forecasts/override/revert
+ * Records an auditable reversal event restoring original baseline AI forecast.
+ */
+overridesRouter.post('/forecasts/override/revert', async (req: Request, res: Response) => {
+  const { sku_id, branch_id, forecast_date } = req.body;
+
+  if (!sku_id || !branch_id || !forecast_date) {
+    return res.status(400).json({ error: 'sku_id, branch_id, and forecast_date are required' });
+  }
+
+  const authUser = (req.headers['x-user-id'] as string) || (req.headers['authorization'] ? 'authorized-user' : 'user-ops-mgr');
+
+  try {
+    // Find latest override for original forecast
+    const latestRes = await pool.query(`
+      SELECT original_forecast, model_version
+      FROM public.forecast_overrides
+      WHERE sku_id = $1 AND branch_id = $2 AND forecast_date = $3
+      ORDER BY created_at DESC
+      LIMIT 1;
+    `, [sku_id, branch_id, forecast_date]);
+
+    if (latestRes.rows.length === 0) {
+      return res.status(404).json({ error: 'No existing override found to revert' });
+    }
+
+    const orig = latestRes.rows[0].original_forecast;
+    const modelVersion = latestRes.rows[0].model_version || 'lgbm-v1.0-quantile';
+
+    const insertQuery = `
+      INSERT INTO public.forecast_overrides (
+        sku_id, branch_id, forecast_date, original_forecast, 
+        override_quantity, reason_code, notes, user_id, model_version
+      )
+      VALUES ($1, $2, $3, $4, $5, 'REVERT_TO_AI', 'Manual override reverted to baseline AI P50 forecast', $6, $7)
+      RETURNING *;
+    `;
+
+    const { rows } = await pool.query(insertQuery, [
+      sku_id,
+      branch_id,
+      forecast_date,
+      orig,
+      orig,
+      authUser,
+      modelVersion
+    ]);
+
+    console.log(`[AUDIT-REVERT] SKU: ${sku_id}, Branch: ${branch_id}, Date: ${forecast_date}, Restored AI P50: ${orig}`);
+
+    return res.json({
+      status: 'OVERRIDE_REVERTED',
+      sku_id,
+      branch_id,
+      forecast_date,
+      restored_quantity: orig,
+      audit_record: rows[0]
+    });
+  } catch (error) {
+    console.error('[OVERRIDES] Error reverting override:', error);
+    return res.status(500).json({ error: 'Failed to revert manual override' });
   }
 });
 
