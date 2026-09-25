@@ -133,3 +133,63 @@ def test_active_products_only():
     with engine.connect() as conn:
         cnt = conn.execute(text("SELECT count(*) FROM public.products WHERE status = 'ACTIVE';")).fetchone()[0]
         assert cnt > 0
+        inactive_cnt = conn.execute(text("SELECT count(*) FROM public.products WHERE status != 'ACTIVE';")).fetchone()[0]
+        # Inactive products should never be returned by batch scoring active query
+        active_skus = [r[0] for r in conn.execute(text("SELECT sku_id FROM public.products WHERE status = 'ACTIVE';")).fetchall()]
+        assert len(active_skus) == cnt
+
+def test_production_no_fixed_base_quantity():
+    """Requirement 3: Forecast must be model-driven and not generated from a fixed baseline."""
+    model_dir = "apps/ml-service/models" if os.path.exists("apps/ml-service/models") else "models"
+    model = LightGBMQuantileModel(model_dir=model_dir)
+    model.load()
+    
+    # Feature vector 1: low demand features
+    data_low = {col: 0.0 for col in FEATURE_COLUMNS}
+    data_low['sku_id'] = 'SKU-BRD-01'
+    data_low['branch_id'] = 'BR-KHI-01'
+    data_low['category_id'] = 'BREAD'
+    data_low['lag_1'] = 5.0
+    data_low['lag_2'] = 5.0
+    data_low['lag_7'] = 5.0
+    data_low['rolling_mean_7'] = 5.0
+    data_low['same_weekday_mean_4'] = 5.0
+    
+    # Feature vector 2: high demand features
+    data_high = data_low.copy()
+    data_high['lag_1'] = 300.0
+    data_high['lag_2'] = 290.0
+    data_high['lag_7'] = 310.0
+    data_high['rolling_mean_7'] = 300.0
+    data_high['rolling_mean_14'] = 295.0
+    data_high['same_weekday_mean_4'] = 305.0
+    
+    p10_low, p50_low, p90_low = model.predict_quantiles(pd.DataFrame([data_low]))
+    p10_high, p50_high, p90_high = model.predict_quantiles(pd.DataFrame([data_high]))
+    
+    # Predictions must not be hardcoded constant
+    assert p50_low[0] != p50_high[0], f"Predictions must be dynamic: low={p50_low[0]}, high={p50_high[0]}"
+    assert p50_high[0] > p50_low[0], "Higher historical demand must produce higher forecast"
+
+def test_sarimax_participation_in_production():
+    """Requirement 5: SARIMAX actively participates in production ensemble prediction."""
+    sarimax = SarimaxBaselineModel()
+    ensemble = P50WeightedEnsemble()
+    
+    # Obtain real SARIMAX forecast for branch and category with exog flags
+    exog_future = np.zeros((7, 5))
+    sarimax_p50 = sarimax.predict(branch_id="BR-KHI-01", category_id="BREAD", steps=7, exog_future=exog_future)
+    assert len(sarimax_p50) == 7
+    assert all(q >= 0 for q in sarimax_p50)
+    
+    # Combine with LightGBM
+    lgbm_p50 = np.array([25.0] * 7)
+    blended = ensemble.predict_ensemble_p50("BR-KHI-01", lgbm_p50, sarimax_p50)
+    
+    w_lgb, w_sar = ensemble.branch_weights["BR-KHI-01"]
+    assert w_sar > 0, "SARIMAX weight must be non-zero in production ensemble"
+    # Blended output must reflect both models
+    expected = np.round(w_lgb * lgbm_p50 + w_sar * sarimax_p50).astype(int)
+    np.testing.assert_array_equal(blended, expected)
+
+

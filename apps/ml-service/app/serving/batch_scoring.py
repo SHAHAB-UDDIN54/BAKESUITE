@@ -93,6 +93,9 @@ def run_35_day_batch_scoring(feature_date: Optional[date] = None) -> Dict[str, A
         """)).fetchall()
 
         # Requirement 7: Trailing 56-day max observed demand strictly before the feature date
+        # Calculate this separately for SKU + Branch.
+        # Use only the trailing 56-day period available before the forecast date.
+        # Do NOT use the maximum quantity from all historical data.
         trailing_56_start = as_at_date - timedelta(days=56)
         max_demand_rows = conn.execute(text("""
             SELECT sku_id, branch_id, COALESCE(MAX(total_quantity), 0) as max_qty
@@ -101,15 +104,7 @@ def run_35_day_batch_scoring(feature_date: Optional[date] = None) -> Dict[str, A
             GROUP BY sku_id, branch_id;
         """), {"t_start": trailing_56_start, "as_at_date": as_at_date}).fetchall()
         
-        # If no records in trailing 56 days (e.g. historical seed offset), fallback to overall observed max
         max_demand_map = {(r[0], r[1]): int(r[2]) for r in max_demand_rows}
-        if not max_demand_map or all(v == 0 for v in max_demand_map.values()):
-            all_time_rows = conn.execute(text("""
-                SELECT sku_id, branch_id, COALESCE(MAX(total_quantity), 30) as max_qty
-                FROM ml.daily_demand_base
-                GROUP BY sku_id, branch_id;
-            """)).fetchall()
-            max_demand_map = {(r[0], r[1]): max(5, int(r[2])) for r in all_time_rows}
 
         # Trailing history up to as_at_date for feature extraction
         hist_rows = conn.execute(text("""
@@ -187,9 +182,9 @@ def run_35_day_batch_scoring(feature_date: Optional[date] = None) -> Dict[str, A
             city = branch[1]
             area_type = branch[2]
 
-            # Trailing 56d max observed demand
-            max_observed = max_demand_map.get((sku_id, b_id), 30)
-            forecast_ceiling = max(10, int(max_observed * 3.0))
+            # Trailing 56d max observed demand for this SKU + Branch strictly prior to forecast date
+            max_observed = max_demand_map.get((sku_id, b_id), 0)
+            forecast_ceiling = int(max_observed * 3.0) if max_observed > 0 else None
 
             hist_series = history_by_pair.get((sku_id, b_id), [])
             # Extract historical summary statistics for feature construction
@@ -331,7 +326,7 @@ def run_35_day_batch_scoring(feature_date: Optional[date] = None) -> Dict[str, A
 
                 # Anomaly clipping: max 3x trailing 56-day observed demand
                 clipped = False
-                if raw_p50 > forecast_ceiling:
+                if forecast_ceiling is not None and raw_p50 > forecast_ceiling:
                     final_p50 = forecast_ceiling
                     clipped = True
                 else:
@@ -339,7 +334,7 @@ def run_35_day_batch_scoring(feature_date: Optional[date] = None) -> Dict[str, A
 
                 final_p10 = max(1, min(raw_p10, final_p50))
                 final_p90 = max(final_p50, raw_p90)
-                if clipped and final_p90 > int(forecast_ceiling * 1.5):
+                if clipped and forecast_ceiling is not None and final_p90 > int(forecast_ceiling * 1.5):
                     final_p90 = int(forecast_ceiling * 1.5)
 
                 # Ensure strict monotonic ordering: P10 <= P50 <= P90

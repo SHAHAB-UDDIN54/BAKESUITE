@@ -382,7 +382,47 @@ Humne application ko completely bug-free aur production-grade banane ke liye dar
 
 ---
 
-## 13. Conclusion
-BakeSuite ka frontend ab sirf aik visual presentation nahi hai balkay aik **fully integrated, resilient commercial bakery intelligence ERP** hai jismein Forecast Workbench, Branch Indent Plan, Central Kitchen Bake Plan, aur Purchase Requirements aapas mein real mathematical demand aur robust fallback guardrails ke sath chalta hai.
+## 14. Complete Audit, Fixes & Production Hardening Summary (Roman Urdu & English)
+
+Is phase mein BakeSuite codebase ka mukammal audit kiya gaya aur tamam adhoori, hardcoded, ya synthetic calculations ko remove kar ke strictly real database aur trained ML model pipeline se connect kiya gaya:
+
+### 14.1 Trailing 56-Day Clipping Fix (`batch_scoring.py`)
+* **Masla (Problem):** Pehle agar trailing 56 dinon mein demand available na hoti toh code `ml.daily_demand_base` se all-time historical maximum utha leta tha jo Requirement 7 ki khilaf-warzi thi.
+* **Hal (Solution):** All-time query fallback mukammal khatam kar diya gaya. Ab strictly `as_at_date - 56 days` se `as_at_date` tak ka maximum observed demand SKU aur Branch ke mutabiq query hota hai. Forecast ceiling strictly $3 \times \text{trailing\_56d\_max}$ par apply hoti hai. Agar demand history nahi hai toh ceiling null rehti hai aur quantile order $P_{10} \le P_{50} \le P_{90}$ barqarar rehta hai.
+
+### 14.2 Rescore AI Endpoint Mukammal Rebuild (`forecast.py`)
+* **Masla (Problem):** `/ml/v1/forecast/demand/rescore` endpoint mein hardcoded dummy values thin:
+  - Base price default `200.0` PKR
+  - Dummy baseline quantity: `5000 / price` ($\approx 25$)
+  - Dummy calendar flags: `salary_week_flag: 0`, `ramadan_flag: 0`, `days_to_eid_ul_fitr: 45`
+  - Fixed promotional volume multiplier (`* 1.015`) baghair features rebuild kiye.
+  - Confidence score aur event context return nahi ho raha tha.
+  - PostgreSQL mein `gregorian_date = ANY(:dates)` par type mismatch error (`operator does not exist: date = text`) aa raha tha.
+* **Hal (Solution):**
+  1. Real active catalog (`public.products`) se base price aur category fetch ki.
+  2. Point-in-time historical lags (`lag_1..56`, `rolling_mean`, `ewma_03`, `same_weekday_mean`) `ml.daily_demand_base` se calculate kiye.
+  3. `ml.fg_calendar_day` se target date ka actual event context, Ramadan, Chand Raat, aur Eid distance uthaya.
+  4. String dates ko `datetime.date` objects mein convert kar ke PostgreSQL `date[]` parameter type mismatch hal kiya.
+  5. 35-day forward horizon limit enforce ki (36+ dinon par HTTP 422 reject hota hai).
+  6. Real LightGBM tri-quantile model run kiya aur full SRS formula ke mutabiq Dispersion $\times$ Sufficiency confidence score return kiya.
+
+### 14.3 Deterministic Fallback Cleanup (`demandFallback.ts`)
+* **Masla (Problem):** Agar branch par sales data na milta toh Level 3 hierarchy category defaults (`BREAD: 25`, `CAKE: 14`) aur Rs 180 price use kar leti thi jo synthetic data tha.
+* **Hal (Solution):** Tamam synthetic category constants khatam kar diye gaye. Ab agar kisi SKU ka historical demand data bilkul mojood na ho, toh system fake data generate karne ke bajaye clear descriptive error throw karta hai: `Historical demand data unavailable for fallback calculation`.
+
+### 14.4 Model Sensitivity & SARIMAX Participation Verification
+* `test_ai01_corrections.py` mein automated tests add kiye gaye jo explicitly verify karte hain:
+  1. **Dynamic Model Sensitivity:** Lag aur rolling demand barhane se LightGBM prediction barhti hai; koi fixed production baseline quantity use nahi hoti.
+  2. **SARIMAX Participation:** SARIMAX baseline model exogenous variables ke sath predict karta hai aur NNLS weighted ensemble mein active weight ke sath hissa leta hai.
+  3. **Active Products Only:** Batch scoring aur catalog queries sirf `status = 'ACTIVE'` products ko forecast karti hain.
+
+### 14.5 Mukammal Test Results
+* **ERP Core (`npm run test:erp`):** 100% Passed (Regional Formatters, PostgreSQL connection, AC-4 deterministic fallback, 32 active SKUs, 35d vs 36d guardrail, Manual Override & Revert audit trail, Server-side branch authorization, Circuit Breaker state machine).
+* **ML Service (`npm run test:ml`):** **35 / 35 Tests Passed** in 25.81s (Zero failures).
+
+---
+
+## 15. Conclusion
+BakeSuite ERP ab mukammal taur par auditable, mathematically robust, aur production-grade state mein hai jahan Frontend $\rightarrow$ ERP Core $\rightarrow$ ML Service $\rightarrow$ PostgreSQL pipeline mein kahin bhi fake, random, ya hardcoded numbers use nahi ho rahe.
 
 

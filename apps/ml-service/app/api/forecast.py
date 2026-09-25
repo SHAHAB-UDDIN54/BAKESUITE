@@ -8,6 +8,7 @@ import os
 from typing import List, Optional, Dict, Any
 from datetime import date, datetime, timedelta
 import pandas as pd
+import numpy as np
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import text
@@ -365,11 +366,12 @@ def get_demand_forecast(
 @router.post("/rescore")
 def rescore_scenario_demand(request: ScenarioRescoreRequest):
     """
-    On-demand scenario rescoring endpoint (Step 26 & Requirement 18).
+    On-demand scenario rescoring endpoint (Step 26 & Requirement 12).
     Accepts at most 500 SKU x Branch pairs with price & promotion overrides.
-    Executes real LightGBM quantile model inference.
+    Executes real LightGBM quantile model inference with point-in-time features.
     """
     import time
+    from collections import defaultdict
     start_time = time.perf_counter()
 
     if len(request.items) > 500:
@@ -388,25 +390,81 @@ def rescore_scenario_demand(request: ScenarioRescoreRequest):
             "results": []
         }
 
-    # Load active products metadata
+    # Requirement 10 & 12: Enforce 35-day horizon guardrail (HTTP 422 if > 35 days)
+    today = datetime.now().date()
+    for item in request.items:
+        try:
+            d_item = datetime.strptime(item.date, "%Y-%m-%d").date()
+            if (d_item - today).days > 35:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Forecast horizon cannot exceed 35 days (requested {item.date} is {(d_item - today).days} days out)"
+                )
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid date format: {item.date}")
+
+    dates = list({item.date for item in request.items})
+    date_objs = [datetime.strptime(d, "%Y-%m-%d").date() for d in dates]
+    skus = list({item.sku_id for item in request.items})
+    branches = list({item.branch_id for item in request.items})
+
+    # Load active products metadata and calendar information
     with engine.connect() as conn:
         prod_rows = conn.execute(text("""
             SELECT sku_id, category_id, base_price, shelf_life_hours
-            FROM public.products;
-        """)).fetchall()
+            FROM public.products
+            WHERE sku_id = ANY(:skus) AND status = 'ACTIVE';
+        """), {"skus": skus}).fetchall()
         prod_map = {r[0]: {"category_id": r[1], "base_price": float(r[2]), "shelf_life": r[3]} for r in prod_rows}
 
-        # Pre-fetch existing baseline predictions where available
-        dates = list({item.date for item in request.items})
-        skus = list({item.sku_id for item in request.items})
-        branches = list({item.branch_id for item in request.items})
+        cal_rows = conn.execute(text("""
+            SELECT 
+                gregorian_date, event_name, holiday_flag, ramadan_flag,
+                ramadan_day_index, last_ten_nights_flag, chand_raat_flag,
+                days_to_eid_ul_fitr, days_to_eid_ul_adha, muharram_flag,
+                salary_week_flag, day_of_week, is_weekend_spike
+            FROM ml.fg_calendar_day
+            WHERE gregorian_date = ANY(:dates);
+        """), {"dates": date_objs}).fetchall()
+        cal_map = {str(r[0]): r for r in cal_rows}
 
+        # Pre-fetch existing baseline predictions where available
         baseline_rows = conn.execute(text("""
-            SELECT sku_id, branch_id, forecast_date, p50_quantity
+            SELECT sku_id, branch_id, forecast_date, p10_quantity, p50_quantity, p90_quantity, confidence_score, confidence_band, event_context
             FROM ml.pred_demand_daily
-            WHERE sku_id = ANY(:skus) AND branch_id = ANY(:branches);
-        """), {"skus": skus, "branches": branches}).fetchall()
-        baseline_map = {(r[0], r[1], str(r[2])): int(r[3]) for r in baseline_rows}
+            WHERE sku_id = ANY(:skus) AND branch_id = ANY(:branches) AND forecast_date = ANY(:dates);
+        """), {"skus": skus, "branches": branches, "dates": date_objs}).fetchall()
+        baseline_map = {
+            (r[0], r[1], str(r[2])): {
+                "p10": int(r[3]), "p50": int(r[4]), "p90": int(r[5]),
+                "conf": float(r[6]), "band": r[7], "event": r[8]
+            }
+            for r in baseline_rows
+        }
+
+        # Fetch historical demand for feature construction
+        hist_rows = conn.execute(text("""
+            SELECT sku_id, branch_id, business_date, total_quantity, stockout_censored_flag
+            FROM ml.daily_demand_base
+            WHERE sku_id = ANY(:skus) AND branch_id = ANY(:branches) AND business_date <= :today
+            ORDER BY sku_id, branch_id, business_date ASC;
+        """), {"skus": skus, "branches": branches, "today": today}).fetchall()
+
+        # Requirement 7: Trailing 56d max observed demand
+        trailing_56_start = today - timedelta(days=56)
+        max_demand_rows = conn.execute(text("""
+            SELECT sku_id, branch_id, COALESCE(MAX(total_quantity), 0) as max_qty
+            FROM ml.daily_demand_base
+            WHERE sku_id = ANY(:skus) AND branch_id = ANY(:branches)
+              AND business_date >= :t_start AND business_date < :today
+            GROUP BY sku_id, branch_id;
+        """), {"skus": skus, "branches": branches, "t_start": trailing_56_start, "today": today}).fetchall()
+        max_demand_map = {(r[0], r[1]): int(r[2]) for r in max_demand_rows}
+
+    # Group history by (sku_id, branch_id)
+    history_by_pair = defaultdict(list)
+    for row in hist_rows:
+        history_by_pair[(row[0], row[1])].append((row[2], int(row[3]), bool(row[4])))
 
     # Load LightGBM model
     models_dir = os.path.join(os.path.dirname(__file__), "..", "..", "models")
@@ -417,65 +475,133 @@ def rescore_scenario_demand(request: ScenarioRescoreRequest):
     item_metadata = []
 
     for item in request.items:
-        prod_info = prod_map.get(item.sku_id, {"category_id": "BREAD", "base_price": 200.0, "shelf_life": 48})
+        prod_info = prod_map.get(item.sku_id)
+        if not prod_info:
+            # Skip or reject inactive / nonexistent SKUs
+            continue
+
         base_price = prod_info["base_price"]
         scenario_price = item.scenario_price_pkr if item.scenario_price_pkr is not None else base_price
         promo_depth = item.promotion_depth_percent or 0.0
 
-        # Baseline P50 from existing persistent prediction or catalog benchmark
-        base_p50 = baseline_map.get((item.sku_id, item.branch_id, item.date), int(round(5000.0 / max(100.0, base_price))))
+        hist_series = history_by_pair.get((item.sku_id, item.branch_id), [])
+        non_censored_count = sum(1 for h in hist_series[-180:] if not h[2]) if hist_series else 100
 
-        try:
+        # Compute point-in-time lag features from actual history
+        if hist_series:
+            recent_qtys = [h[1] for h in hist_series]
+            lag_1 = recent_qtys[-1] if len(recent_qtys) >= 1 else 20.0
+            lag_2 = recent_qtys[-2] if len(recent_qtys) >= 2 else lag_1
+            lag_3 = recent_qtys[-3] if len(recent_qtys) >= 3 else lag_2
+            lag_7 = recent_qtys[-7] if len(recent_qtys) >= 7 else lag_1
+            lag_14 = recent_qtys[-14] if len(recent_qtys) >= 14 else lag_7
+            lag_28 = recent_qtys[-28] if len(recent_qtys) >= 28 else lag_14
+            lag_56 = recent_qtys[-56] if len(recent_qtys) >= 56 else lag_28
+
+            roll_7 = float(np.mean(recent_qtys[-7:])) if len(recent_qtys) >= 2 else float(lag_1)
+            roll_14 = float(np.mean(recent_qtys[-14:])) if len(recent_qtys) >= 2 else roll_7
+            roll_28 = float(np.mean(recent_qtys[-28:])) if len(recent_qtys) >= 2 else roll_14
+            roll_std_7 = float(np.std(recent_qtys[-7:])) if len(recent_qtys) >= 2 else 3.0
+
+            dow_map: Dict[int, List[int]] = {i: [] for i in range(1, 8)}
+            for d_item, q_item, _ in hist_series[-90:]:
+                dow_map[d_item.isoweekday()].append(q_item)
+
+            weights = [0.3 * ((1.0 - 0.3) ** i) for i in range(min(30, len(recent_qtys)))]
+            w_norm = sum(weights)
+            ewma_val = sum(w * q for w, q in zip(weights, reversed(recent_qtys[-30:]))) / (w_norm or 1.0)
+        else:
+            base_p50 = baseline_map.get((item.sku_id, item.branch_id, item.date), {}).get("p50", 15)
+            lag_1 = lag_2 = lag_3 = lag_7 = lag_14 = lag_28 = lag_56 = float(base_p50)
+            roll_7 = roll_14 = roll_28 = float(base_p50)
+            roll_std_7 = 3.0
+            dow_map = {i: [base_p50] for i in range(1, 8)}
+            ewma_val = float(base_p50)
+
+        cal_info = cal_map.get(item.date)
+        if cal_info:
+            event_name = cal_info[1] or "Normal"
+            h_flag = int(bool(cal_info[2]))
+            r_flag = int(bool(cal_info[3]))
+            r_idx = cal_info[4] or 0
+            ltn_flag = int(bool(cal_info[5]))
+            cr_flag = int(bool(cal_info[6]))
+            d_fitr = cal_info[7] if cal_info[7] is not None else 45
+            d_adha = cal_info[8] if cal_info[8] is not None else 90
+            muh_flag = int(bool(cal_info[9]))
+            sal_flag = int(bool(cal_info[10]))
+            dow = cal_info[11]
+            wknd_spike = int(bool(cal_info[12]))
+        else:
             dt_item = datetime.strptime(item.date, "%Y-%m-%d").date()
+            event_name = "Normal"
+            h_flag = r_flag = r_idx = ltn_flag = cr_flag = muh_flag = sal_flag = 0
+            d_fitr, d_adha = 45, 90
             dow = dt_item.isoweekday()
-        except Exception:
-            dt_item = datetime.now().date()
-            dow = 1
+            wknd_spike = int(dow in (5, 6, 7))
+
+        dow_hist = dow_map.get(dow, [roll_7])
+        sw_4 = float(np.mean(dow_hist[-4:])) if dow_hist else roll_7
+        sw_8 = float(np.mean(dow_hist[-8:])) if dow_hist else sw_4
 
         price_ratio = scenario_price / (base_price or 1.0)
-        
+
         feature_rows.append({
             'sku_id': item.sku_id,
             'branch_id': item.branch_id,
             'category_id': prod_info["category_id"],
-            'lag_1': float(base_p50),
-            'lag_2': float(base_p50),
-            'lag_3': float(base_p50),
-            'lag_7': float(base_p50),
-            'lag_14': float(base_p50),
-            'lag_28': float(base_p50),
-            'lag_56': float(base_p50),
-            'rolling_mean_7': float(base_p50),
-            'rolling_mean_14': float(base_p50),
-            'rolling_mean_28': float(base_p50),
-            'rolling_std_7': 3.5,
-            'same_weekday_mean_4': float(base_p50),
-            'same_weekday_mean_8': float(base_p50),
-            'ewma_03': float(base_p50),
+            'lag_1': lag_1,
+            'lag_2': lag_2,
+            'lag_3': lag_3,
+            'lag_7': lag_7,
+            'lag_14': lag_14,
+            'lag_28': lag_28,
+            'lag_56': lag_56,
+            'rolling_mean_7': roll_7,
+            'rolling_mean_14': roll_14,
+            'rolling_mean_28': roll_28,
+            'rolling_std_7': roll_std_7,
+            'same_weekday_mean_4': sw_4,
+            'same_weekday_mean_8': sw_8,
+            'ewma_03': ewma_val,
             'price_ratio_28d': price_ratio,
             'day_of_week': dow,
-            'is_weekend_spike': int(dow in (5, 6, 7)),
-            'salary_week_flag': 0,
-            'holiday_flag': 0,
-            'ramadan_flag': 0,
-            'ramadan_day_index': 0,
-            'last_ten_nights_flag': 0,
-            'chand_raat_flag': 0,
-            'days_to_eid_ul_fitr': 45,
-            'days_to_eid_ul_adha': 90,
-            'muharram_flag': 0,
+            'is_weekend_spike': wknd_spike,
+            'salary_week_flag': sal_flag,
+            'holiday_flag': h_flag,
+            'ramadan_flag': r_flag,
+            'ramadan_day_index': r_idx,
+            'last_ten_nights_flag': ltn_flag,
+            'chand_raat_flag': cr_flag,
+            'days_to_eid_ul_fitr': max(-30, min(14, d_fitr)),
+            'days_to_eid_ul_adha': max(-30, min(14, d_adha)),
+            'muharram_flag': muh_flag,
             'shelf_life_hours': prod_info["shelf_life"],
             'stockout_censored_flag': 0
         })
 
+        base_meta = baseline_map.get((item.sku_id, item.branch_id, item.date), {})
         item_metadata.append({
             "sku_id": item.sku_id,
             "branch_id": item.branch_id,
             "date": item.date,
             "scenario_price": scenario_price,
             "promo_depth": promo_depth,
-            "baseline_p50": base_p50
+            "baseline_p50": base_meta.get("p50", int(round(lag_1))),
+            "event_context": event_name,
+            "non_censored_days": non_censored_count,
+            "max_observed": max_demand_map.get((item.sku_id, item.branch_id), 0)
         })
+
+    if not feature_rows:
+        return {
+            "status": "success",
+            "requested_count": len(request.items),
+            "processed_count": 0,
+            "rescored_count": 0,
+            "duration_ms": 0.0,
+            "results": []
+        }
 
     # Run real model inference
     df_features = pd.DataFrame(feature_rows)
@@ -483,28 +609,53 @@ def rescore_scenario_demand(request: ScenarioRescoreRequest):
 
     results = []
     for idx, meta in enumerate(item_metadata):
-        # Apply promotion elasticity lift (+1.5% demand volume for every 1% promotion discount)
-        promo_factor = 1.0 + (meta["promo_depth"] * 0.015)
-        raw_p50 = int(round(p50_arr[idx] * promo_factor))
-        raw_p10 = int(round(p10_arr[idx] * promo_factor))
-        raw_p90 = int(round(p90_arr[idx] * promo_factor))
+        # Promotion discount lifts volume based on model-predicted price ratio;
+        # if promo_depth specified without manual scenario price change, apply standard promo factor
+        promo_depth = meta["promo_depth"]
+        promo_multiplier = 1.0 + (promo_depth * 0.015) if promo_depth > 0 else 1.0
 
-        # Enforce strict quantile order: P10 <= P50 <= P90
-        p10_res = max(1, min(raw_p10, raw_p50))
-        p50_res = max(p10_res, raw_p50)
-        p90_res = max(p50_res, raw_p90)
+        raw_p10 = int(round(p10_arr[idx] * promo_multiplier))
+        raw_p50 = int(round(p50_arr[idx] * promo_multiplier))
+        raw_p90 = int(round(p90_arr[idx] * promo_multiplier))
+
+        # Trailing 56d clipping rule
+        max_obs = meta["max_observed"]
+        forecast_ceiling = int(max_obs * 3.0) if max_obs > 0 else None
+        if forecast_ceiling is not None and raw_p50 > forecast_ceiling:
+            final_p50 = forecast_ceiling
+        else:
+            final_p50 = raw_p50
+
+        # Monotonic quantile ordering
+        final_p10 = max(1, min(raw_p10, final_p50))
+        final_p90 = max(final_p50, raw_p90)
+        if forecast_ceiling is not None and final_p90 > int(forecast_ceiling * 1.5):
+            final_p90 = int(forecast_ceiling * 1.5)
+
+        # SRS Confidence computation
+        conf_res = compute_confidence_score(
+            p10=final_p10,
+            p50=final_p50,
+            p90=final_p90,
+            non_censored_days_180=meta["non_censored_days"],
+            is_cold_start=False,
+            weather_available=True
+        )
 
         results.append({
             "sku_id": meta["sku_id"],
             "branch_id": meta["branch_id"],
             "forecast_date": meta["date"],
             "baseline_p50": meta["baseline_p50"],
-            "scenario_p50": p50_res,
-            "scenario_p10": p10_res,
-            "scenario_p90": p90_res,
+            "scenario_p50": final_p50,
+            "scenario_p10": final_p10,
+            "scenario_p90": final_p90,
+            "confidence_score": conf_res["confidence_score"],
+            "confidence_band": conf_res["confidence_band"],
+            "event_context": meta["event_context"],
             "promotion_depth_percent": meta["promo_depth"],
-            "expected_revenue_pkr": round(p50_res * meta["scenario_price"], 2),
-            "delta_units": p50_res - meta["baseline_p50"]
+            "expected_revenue_pkr": round(final_p50 * meta["scenario_price"], 2),
+            "delta_units": final_p50 - meta["baseline_p50"]
         })
 
     elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)

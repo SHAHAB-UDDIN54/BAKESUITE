@@ -39,8 +39,11 @@ export async function calculateDeterministicFallback(
     'SELECT sku_name, category_id, base_price FROM public.products WHERE sku_id = $1;',
     [skuId]
   );
-  const basePrice = prodRes.rows.length > 0 ? parseFloat(prodRes.rows[0].base_price) : 180.00;
-  const categoryId = prodRes.rows.length > 0 ? prodRes.rows[0].category_id : 'BREAD';
+  if (prodRes.rows.length === 0) {
+    throw new Error(`Product ${skuId} not found in catalog`);
+  }
+  const basePrice = parseFloat(prodRes.rows[0].base_price);
+  const categoryId = prodRes.rows[0].category_id;
 
   // 2. Trailing 4 same-weekday occurrences from actual POS invoices or daily demand base
   let avgQty: number | null = null;
@@ -100,17 +103,9 @@ export async function calculateDeterministicFallback(
     }
   }
 
-  // Fallback hierarchy level 3: Category default from SRS profile
+  // If required historical demand does not exist across all levels, throw clear unavailable state
   if (avgQty === null) {
-    const categoryDefaults: Record<string, number> = {
-      'BREAD': 25,
-      'CAKE': 14,
-      'PASTRY': 18,
-      'SAVORY': 20,
-      'SWEET': 16,
-      'BEVERAGE': 22
-    };
-    avgQty = categoryDefaults[categoryId] || 15;
+    throw new Error(`Historical demand data unavailable for fallback calculation for SKU ${skuId} at branch ${branchId}`);
   }
 
   // 3. Calendar & Hijri Event Uplift Lookup (using ml.fg_calendar_day, not Gregorian months)
