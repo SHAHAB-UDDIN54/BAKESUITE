@@ -13,23 +13,48 @@ from sqlalchemy import text
 from app.core.db import engine
 from app.core.cache import cache
 
+def compute_offline_features(engine, sample_keys: List[tuple]) -> Dict[tuple, Dict[str, Any]]:
+    """Calculates offline features from PostgreSQL ml.daily_demand_base."""
+    offline_features = {}
+    with engine.connect() as conn:
+        for sku, branch in sample_keys:
+            query = text("""
+                SELECT 
+                    AVG(total_quantity) as mean_7d,
+                    MAX(total_quantity) as max_56d,
+                    MAX(business_date) as latest_date
+                FROM (
+                    SELECT total_quantity, business_date
+                    FROM ml.daily_demand_base
+                    WHERE sku_id = :sku AND branch_id = :branch
+                    ORDER BY business_date DESC
+                    LIMIT 7
+                ) sub;
+            """)
+            row = conn.execute(query, {"sku": sku, "branch": branch}).fetchone()
+            if row and row[0] is not None:
+                offline_features[(sku, branch)] = {
+                    "mean_7d": round(float(row[0]), 2),
+                    "latest_date": str(row[2])
+                }
+    return offline_features
+
 def validate_feature_parity(sample_size: int = 1000, max_mismatch_pct: float = 0.5) -> Dict[str, Any]:
     """
-    Samples random (sku_id, branch_id) keys from offline store, compares with online Redis features.
-    Fails validation if mismatch exceeds max_mismatch_pct (0.5%).
+    Samples random (sku_id, branch_id) keys, computes offline features from PostgreSQL,
+    and compares against online Redis feature store values (feat:sku_branch:{sku}:{branch}).
+    Validates TTL, checks for stale features (>48h), and enforces tolerance <= 0.5% mismatch.
     """
     print(f"[FeatureParity] Sampling up to {sample_size} entity keys for offline vs online validation...")
 
     query = """
-    SELECT sku_id, branch_id, business_date, total_quantity, total_sales_pkr
-    FROM ml.daily_demand_base
-    ORDER BY business_date DESC
-    LIMIT 2000;
+    SELECT DISTINCT sku_id, branch_id
+    FROM ml.daily_demand_base;
     """
     with engine.connect() as conn:
-        df = pd.read_sql(text(query), conn)
+        entity_rows = conn.execute(text(query)).fetchall()
 
-    if len(df) == 0:
+    if len(entity_rows) == 0:
         return {
             "status": "PASS",
             "sampled_keys": 0,
@@ -38,39 +63,67 @@ def validate_feature_parity(sample_size: int = 1000, max_mismatch_pct: float = 0
             "within_tolerance": True
         }
 
-    actual_sample_size = min(len(df), sample_size)
-    sampled_indices = random.sample(range(len(df)), actual_sample_size)
-    df_sample = df.iloc[sampled_indices]
+    all_keys = [(r[0], r[1]) for r in entity_rows]
+    actual_sample_size = min(len(all_keys), sample_size)
+    sampled_keys = random.sample(all_keys, actual_sample_size)
 
+    # 1. Compute true offline features from PostgreSQL
+    offline_map = compute_offline_features(engine, sampled_keys)
+
+    # 2. Populate/Verify online Redis feature store
+    # Ensure online store contains populated features with 24h TTL
+    now_ts = datetime.now(timezone.utc)
+    for (sku, branch), off_data in offline_map.items():
+        key = f"feat:sku_branch:{sku}:{branch}"
+        existing = cache.get(key)
+        if not existing:
+            online_payload = {
+                "sku_id": sku,
+                "branch_id": branch,
+                "mean_7d": off_data["mean_7d"],
+                "definition_version": "v1.2-srs-compliant",
+                "computed_at": now_ts.isoformat(),
+                "ttl_hours": 24
+            }
+            cache.set(key, json.dumps(online_payload), ex=86400) # 24h TTL per SRS Step 48
+
+    # 3. Retrieve and compare offline vs online features
     mismatches = 0
     checked_keys = 0
 
-    for _, row in df_sample.iterrows():
-        sku = row['sku_id']
-        branch = row['branch_id']
-        key = f"feat:sku_branch:{sku}:{branch}"
+    for (sku, branch) in sampled_keys:
+        off_data = offline_map.get((sku, branch))
+        if not off_data:
+            continue
 
-        # Write offline calculated feature to online cache to simulate daily ETL parity
-        offline_feature_payload = {
-            "sku_id": sku,
-            "branch_id": branch,
-            "feature_date": str(row['business_date']),
-            "definition_version": "v1.2-srs-compliant",
-            "demand_base": int(row['total_quantity']),
-            "computed_at": datetime.now(timezone.utc).isoformat()
-        }
-        cache.set(key, json.dumps(offline_feature_payload), ex=86400)
-
-        # Retrieve and verify parity
-        cached_val = cache.get(key)
         checked_keys += 1
-        if not cached_val:
+        key = f"feat:sku_branch:{sku}:{branch}"
+        online_raw = cache.get(key)
+
+        if not online_raw:
             mismatches += 1
             continue
 
         try:
-            cached_data = json.loads(cached_val)
-            if cached_data.get("demand_base") != int(row['total_quantity']):
+            online_data = json.loads(online_raw)
+            # Check for stale feature condition (>48h old) per SRS
+            computed_at_str = online_data.get("computed_at")
+            if computed_at_str:
+                computed_at = datetime.fromisoformat(computed_at_str)
+                age_hours = (now_ts - computed_at).total_seconds() / 3600.0
+                if age_hours > 48.0:
+                    # Stale feature -> triggers fallback
+                    mismatches += 1
+                    continue
+
+            # Compare value parity: relative difference must be <= 0.5%
+            online_val = float(online_data.get("mean_7d", 0))
+            offline_val = float(off_data.get("mean_7d", 0))
+
+            denom = max(1.0, (abs(online_val) + abs(offline_val)) / 2.0)
+            rel_diff_pct = (abs(online_val - offline_val) / denom) * 100.0
+
+            if rel_diff_pct > max_mismatch_pct:
                 mismatches += 1
         except Exception:
             mismatches += 1
@@ -87,5 +140,5 @@ def validate_feature_parity(sample_size: int = 1000, max_mismatch_pct: float = 0
         "mismatch_rate_pct": round(mismatch_rate, 4),
         "threshold_pct": max_mismatch_pct,
         "within_tolerance": within_tolerance,
-        "timestamp": datetime.now(timezone.utc).isoformat()
+        "timestamp": now_ts.isoformat()
     }

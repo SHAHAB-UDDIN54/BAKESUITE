@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { pool } from '../db/index.js';
+import { authenticateUser, verifyBranchAccess } from '../auth/authMiddleware.js';
 
 export const overridesRouter = Router();
 
@@ -41,7 +42,7 @@ ensureOverridesTable().catch(err => console.error('[OVERRIDES] Table init error:
  * POST /api/v1/ai/forecasts/override
  * Records a signed, auditable forecast override without modifying the original ML prediction.
  */
-overridesRouter.post('/forecasts/override', async (req: Request, res: Response) => {
+overridesRouter.post('/forecasts/override', authenticateUser, async (req: Request, res: Response) => {
   const {
     sku_id,
     branch_id,
@@ -49,12 +50,17 @@ overridesRouter.post('/forecasts/override', async (req: Request, res: Response) 
     original_forecast,
     override_quantity,
     reason_code,
-    notes,
-    user_id = 'user-mgr-01'
+    notes
   } = req.body;
 
-  const authUser = (req.headers['x-user-id'] as string) || (req.headers['authorization'] ? 'authorized-user' : 'user-ops-mgr');
-  const userId = authUser;
+  const userId = req.user?.userId || 'unknown';
+
+  if (branch_id && !verifyBranchAccess(req.user, branch_id)) {
+    return res.status(403).json({
+      error: `Forbidden: User ${userId} is not authorized to override forecasts for branch ${branch_id}`,
+      auth_status: 'BRANCH_SCOPE_VIOLATION'
+    });
+  }
 
   // 1. Validation
   if (!sku_id || !branch_id || !forecast_date) {
@@ -117,14 +123,21 @@ overridesRouter.post('/forecasts/override', async (req: Request, res: Response) 
  * POST /api/v1/ai/forecasts/override/revert
  * Records an auditable reversal event restoring original baseline AI forecast.
  */
-overridesRouter.post('/forecasts/override/revert', async (req: Request, res: Response) => {
+overridesRouter.post('/forecasts/override/revert', authenticateUser, async (req: Request, res: Response) => {
   const { sku_id, branch_id, forecast_date } = req.body;
 
   if (!sku_id || !branch_id || !forecast_date) {
     return res.status(400).json({ error: 'sku_id, branch_id, and forecast_date are required' });
   }
 
-  const authUser = (req.headers['x-user-id'] as string) || (req.headers['authorization'] ? 'authorized-user' : 'user-ops-mgr');
+  const userId = req.user?.userId || 'unknown';
+
+  if (!verifyBranchAccess(req.user, branch_id)) {
+    return res.status(403).json({
+      error: `Forbidden: User ${userId} is not authorized to revert overrides for branch ${branch_id}`,
+      auth_status: 'BRANCH_SCOPE_VIOLATION'
+    });
+  }
 
   try {
     // Find latest override for original forecast
@@ -158,7 +171,7 @@ overridesRouter.post('/forecasts/override/revert', async (req: Request, res: Res
       forecast_date,
       orig,
       orig,
-      authUser,
+      userId,
       modelVersion
     ]);
 
@@ -182,8 +195,16 @@ overridesRouter.post('/forecasts/override/revert', async (req: Request, res: Res
  * GET /api/v1/ai/forecasts/override/analytics
  * Compares original AI forecast vs human override vs actual demand (AI-10 analytics)
  */
-overridesRouter.get('/forecasts/override/analytics', async (req: Request, res: Response) => {
+overridesRouter.get('/forecasts/override/analytics', authenticateUser, async (req: Request, res: Response) => {
   const branchId = req.query.branch_id as string;
+  const userId = req.user?.userId || 'unknown';
+
+  if (branchId && !verifyBranchAccess(req.user, branchId)) {
+    return res.status(403).json({
+      error: `Forbidden: User ${userId} is not authorized for branch ${branchId}`,
+      auth_status: 'BRANCH_SCOPE_VIOLATION'
+    });
+  }
   try {
     let query = `
       SELECT 

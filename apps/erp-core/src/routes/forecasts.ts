@@ -3,8 +3,42 @@ import { calculateDeterministicFallback } from '../fallbacks/demandFallback.js';
 import { circuitBreaker } from '../fallbacks/circuitBreaker.js';
 import { config } from '../config/index.js';
 import { pool } from '../db/index.js';
+import { authenticateUser, verifyBranchAccess } from '../auth/authMiddleware.js';
 
 export const forecastsRouter = Router();
+
+/**
+ * GET /api/v1/ai/metadata/branches
+ * Returns active branches from database (Requirement 27)
+ */
+forecastsRouter.get('/metadata/branches', async (req: Request, res: Response) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT branch_id, branch_name, city, area_type FROM public.branches ORDER BY branch_id;'
+    );
+    return res.json(rows);
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Failed to fetch branches' });
+  }
+});
+
+/**
+ * GET /api/v1/ai/metadata/categories
+ * Returns active categories from database (Requirement 27)
+ */
+forecastsRouter.get('/metadata/categories', async (req: Request, res: Response) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT DISTINCT category_id FROM public.products WHERE status = 'ACTIVE' ORDER BY category_id;"
+    );
+    return res.json(rows.map(r => ({
+      category_id: r.category_id,
+      category_name: r.category_id
+    })));
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Failed to fetch categories' });
+  }
+});
 
 /**
  * GET /api/v1/ai/forecasts/circuit-breaker
@@ -17,6 +51,7 @@ forecastsRouter.get('/forecasts/circuit-breaker', (req: Request, res: Response) 
 /**
  * GET /api/v1/ai/forecasts/batch-info
  * Returns metadata regarding the most recent nightly batch scoring run.
+ * Requirement 24: Returns explicit 'Unavailable' state if not recorded, no fake dates.
  */
 forecastsRouter.get('/forecasts/batch-info', async (req: Request, res: Response) => {
   try {
@@ -35,7 +70,7 @@ forecastsRouter.get('/forecasts/batch-info', async (req: Request, res: Response)
 
     if (rows.length === 0) {
       return res.json({
-        status: 'No batch run recorded',
+        status: 'Unavailable',
         last_run_at: null,
         run_id: null,
         forecast_horizon: 35,
@@ -54,11 +89,11 @@ forecastsRouter.get('/forecasts/batch-info', async (req: Request, res: Response)
   } catch (error) {
     console.error('[ERP-PROXY] Error fetching batch info:', error);
     return res.json({
-      status: 'COMPLETED',
-      last_run_at: '2026-09-22T02:15:00.000Z',
-      run_id: 'RUN-20260922-0215',
+      status: 'Unavailable',
+      last_run_at: null,
+      run_id: null,
       forecast_horizon: 35,
-      skus_scored: 32
+      skus_scored: 0
     });
   }
 });
@@ -67,9 +102,17 @@ forecastsRouter.get('/forecasts/batch-info', async (req: Request, res: Response)
  * GET /api/v1/ai/forecasts/chart-data
  * Returns 28 trailing days of actual sales demand and 14 forward forecast days for a specific SKU and branch.
  */
-forecastsRouter.get('/forecasts/chart-data', async (req: Request, res: Response) => {
+forecastsRouter.get('/forecasts/chart-data', authenticateUser, async (req: Request, res: Response) => {
   const branchId = (req.query.branch_id as string) || 'BR-KHI-01';
   const skuId = (req.query.sku_id as string) || 'SKU-BRD-01';
+
+  // Server-side branch access verification
+  if (!verifyBranchAccess(req.user, branchId)) {
+    return res.status(403).json({
+      error: `Access Denied: User is not authorized for branch ${branchId}`,
+      authorized_branches: req.user?.authorizedBranches || []
+    });
+  }
 
   try {
     // 1. Fetch 28 trailing actuals from ml.daily_demand_base
@@ -214,7 +257,7 @@ async function getActiveOverridesMap(branchId: string): Promise<Map<string, any>
  * Proxy endpoint supporting multi-SKU workbench querying, 35-day horizon validation,
  * manual override persistence merging, and transparent circuit breaker fallback.
  */
-forecastsRouter.get('/forecasts/demand', async (req: Request, res: Response) => {
+forecastsRouter.get('/forecasts/demand', authenticateUser, async (req: Request, res: Response) => {
   const branchId = (req.query.branch_id as string) || 'BR-KHI-01';
   const rawSkuId = req.query.sku_id as string;
   const isMultiSku = !rawSkuId || rawSkuId === 'ALL';
@@ -243,16 +286,12 @@ forecastsRouter.get('/forecasts/demand', async (req: Request, res: Response) => 
     });
   }
 
-  // 2. RBAC Branch Scope Enforcement
-  const allowedBranchesHeader = req.headers['x-user-branches'] as string;
-  if (allowedBranchesHeader) {
-    const allowed = allowedBranchesHeader.split(',').map(b => b.trim());
-    if (!allowed.includes(branchId) && !allowed.includes('*')) {
-      return res.status(403).json({
-        error: `Access Denied: User is not authorized for branch ${branchId}`,
-        authorized_branches: allowed
-      });
-    }
+  // 2. Server-side Branch Authorization Enforcement (Requirements 20 & 21)
+  if (!verifyBranchAccess(req.user, branchId)) {
+    return res.status(403).json({
+      error: `Access Denied: User is not authorized for branch ${branchId}`,
+      authorized_branches: req.user?.authorizedBranches || []
+    });
   }
 
   const startTime = Date.now();

@@ -292,3 +292,15 @@ py -3.12 scripts/validate_data_coverage.py
   py -3.12 scripts/benchmark_batch_scale.py
   ```
 
+
+
+Terminal 1 — Start the ML Microservice:
+powershell
+npm run dev:ml
+
+Terminal 2 — Start ERP Core & Frontend:
+powershell
+npm run dev:erp
+
+
+

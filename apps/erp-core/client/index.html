@@ -95,7 +95,7 @@
             <span id="horizon-text">35-Day Horizon Active</span>
           </div>
           <div class="last-batch-info" id="batch-run-time">
-            Last batch scored: 02:15 PKT
+            Last batch scored: Loading...
           </div>
         </div>
       </header>
@@ -107,21 +107,14 @@
           <div class="filter-group">
             <label for="select-branch">Branch Location:</label>
             <select id="select-branch" class="custom-select">
-              <option value="BR-KHI-01">BR-KHI-01: Karachi Clifton Flagship</option>
-              <option value="BR-LHR-01">BR-LHR-01: Lahore Gulberg Emporium</option>
-              <option value="BR-ISB-01">BR-ISB-01: Islamabad F-7 Markaz</option>
+              <option value="BR-KHI-01">Loading Branches...</option>
             </select>
           </div>
 
           <div class="filter-group">
             <label for="select-category">Category Filter:</label>
             <select id="select-category" class="custom-select">
-              <option value="ALL">All Categories (32 SKUs)</option>
-              <option value="BREAD">Breads & Traditional Loaves</option>
-              <option value="CAKE">Cakes & Pastries</option>
-              <option value="SAVORY">Savories & Hot Kitchen</option>
-              <option value="SWEET">Traditional Sweets & Mithai</option>
-              <option value="BEVERAGE">Beverages & Coffee</option>
+              <option value="ALL">All Categories</option>
             </select>
           </div>
 
@@ -141,8 +134,8 @@
             <div class="kpi-icon icon-units">📦</div>
             <div class="kpi-details">
               <span class="kpi-label">35-Day Forward Demand</span>
-              <span class="kpi-value" id="kpi-total-units">124,580 Units</span>
-              <span class="kpi-trend positive" id="kpi-units-trend">+18.4% vs trailing 35d</span>
+              <span class="kpi-value" id="kpi-total-units">Loading...</span>
+              <span class="kpi-trend positive" id="kpi-units-trend">--</span>
             </div>
           </div>
 
@@ -150,8 +143,8 @@
             <div class="kpi-icon icon-rev">₨</div>
             <div class="kpi-details">
               <span class="kpi-label">Projected Forward Revenue</span>
-              <span class="kpi-value" id="kpi-total-revenue">Rs 34,820,450.00</span>
-              <span class="kpi-trend positive">Peak Margin Mix</span>
+              <span class="kpi-value" id="kpi-total-revenue">Loading...</span>
+              <span class="kpi-trend positive">Planning Estimate</span>
             </div>
           </div>
 
@@ -160,7 +153,7 @@
             <div class="kpi-details">
               <span class="kpi-label">High-Confidence Share</span>
               <span class="kpi-value" id="kpi-high-conf">--%</span>
-              <span class="kpi-trend neutral">Planning Review</span>
+              <span class="kpi-trend neutral">Human Review Required</span>
             </div>
           </div>
 
@@ -239,9 +232,7 @@
           <div class="filter-group">
             <label for="select-indent-branch">Target Branch:</label>
             <select id="select-indent-branch" class="custom-select">
-              <option value="BR-KHI-01">BR-KHI-01: Karachi Clifton Flagship</option>
-              <option value="BR-LHR-01">BR-LHR-01: Lahore Gulberg Emporium</option>
-              <option value="BR-ISB-01">BR-ISB-01: Islamabad F-7 Markaz</option>
+              <option value="BR-KHI-01">Loading Branches...</option>
             </select>
           </div>
 
@@ -249,6 +240,7 @@
             <label for="select-indent-status">Indent Status:</label>
             <select id="select-indent-status" class="custom-select">
               <option value="ALL">All Statuses</option>
+              <option value="Advisory Review">Advisory Review</option>
               <option value="Pending Approval">Pending Approval</option>
               <option value="Approved">Approved</option>
               <option value="Dispatched">Dispatched</option>
@@ -270,8 +262,8 @@
             <div class="kpi-icon icon-units">📑</div>
             <div class="kpi-details">
               <span class="kpi-label">Total Indent Demand</span>
-              <span class="kpi-value" id="kpi-indent-units">3,420 PCS</span>
-              <span class="kpi-trend positive">Next Delivery Wave</span>
+              <span class="kpi-value" id="kpi-indent-units">Loading...</span>
+              <span class="kpi-trend positive">Advisory Requisition</span>
             </div>
           </div>
 
@@ -279,7 +271,7 @@
             <div class="kpi-icon icon-conf">⏳</div>
             <div class="kpi-details">
               <span class="kpi-label">Pending Approval</span>
-              <span class="kpi-value" id="kpi-indent-pending">8 SKUs</span>
+              <span class="kpi-value" id="kpi-indent-pending">--</span>
               <span class="kpi-trend highlight">Requires Branch Sign-off</span>
             </div>
           </div>
@@ -288,8 +280,8 @@
             <div class="kpi-icon icon-rev">🚚</div>
             <div class="kpi-details">
               <span class="kpi-label">Dispatched to Store</span>
-              <span class="kpi-value" id="kpi-indent-dispatched">16 SKUs</span>
-              <span class="kpi-trend positive">In Transit Vans</span>
+              <span class="kpi-value" id="kpi-indent-dispatched">--</span>
+              <span class="kpi-trend positive">Integration Pending</span>
             </div>
           </div>
 
@@ -297,8 +289,8 @@
             <div class="kpi-icon icon-event">⚠️</div>
             <div class="kpi-details">
               <span class="kpi-label">Stockout Risk Level</span>
-              <span class="kpi-value" id="kpi-indent-risk">Low (1 SKU)</span>
-              <span class="kpi-trend neutral">Rusk safety buffer intact</span>
+              <span class="kpi-value" id="kpi-indent-risk">--</span>
+              <span class="kpi-trend neutral">Advisory Buffer</span>
             </div>
           </div>
         </section>
@@ -375,8 +367,8 @@
             <div class="kpi-icon icon-units">🔥</div>
             <div class="kpi-details">
               <span class="kpi-label">Scheduled Batches</span>
-              <span class="kpi-value" id="kpi-bake-batches">28 Batches</span>
-              <span class="kpi-trend positive">7,150 Total Loaves/PCS</span>
+              <span class="kpi-value" id="kpi-bake-batches">Loading...</span>
+              <span class="kpi-trend positive">Advisory Plan</span>
             </div>
           </div>
 
@@ -384,10 +376,10 @@
             <div class="kpi-icon icon-conf">⚡</div>
             <div class="kpi-details">
               <span class="kpi-label">Commercial Oven Capacity</span>
-              <span class="kpi-value" id="kpi-bake-load">82.5% Utilization</span>
+              <span class="kpi-value" id="kpi-bake-load">--</span>
               <div class="capacity-meter-box" style="margin-top:4px;">
                 <div class="capacity-meter-bar">
-                  <div class="capacity-meter-fill" style="width: 82.5%;"></div>
+                  <div class="capacity-meter-fill" style="width: 50%;"></div>
                 </div>
               </div>
             </div>
@@ -397,7 +389,7 @@
             <div class="kpi-icon icon-event">⏲️</div>
             <div class="kpi-details">
               <span class="kpi-label">Current Baking Shift</span>
-              <span class="kpi-value" id="kpi-current-shift-name">Morning Shift</span>
+              <span class="kpi-value" id="kpi-current-shift-name">--</span>
               <span class="kpi-trend highlight">04:00 - 12:00 PKT</span>
             </div>
           </div>
@@ -406,8 +398,8 @@
             <div class="kpi-icon icon-rev">✅</div>
             <div class="kpi-details">
               <span class="kpi-label">Ready for Store Delivery</span>
-              <span class="kpi-value" id="kpi-bake-ready">12 Batches</span>
-              <span class="kpi-trend positive">Cooled & Trayed</span>
+              <span class="kpi-value" id="kpi-bake-ready">--</span>
+              <span class="kpi-trend positive">Advisory View</span>
             </div>
           </div>
         </section>
@@ -420,7 +412,7 @@
               <span class="table-subtitle">Consolidated branch demand, batch counts, oven loading, and stage workflow</span>
             </div>
             <div class="table-actions">
-              <span class="showing-count" id="bake-count-text">Showing 10 scheduled production batches</span>
+              <span class="showing-count" id="bake-count-text">Showing scheduled production batches</span>
             </div>
           </div>
 
@@ -465,7 +457,7 @@
             </select>
           </div>
 
-          <button class="btn-action btn-accent" id="btn-generate-po-all">Issue All Required POs</button>
+          <button class="btn-action btn-accent" id="btn-generate-po-all">Review Purchase Recommendations</button>
           <button class="btn-action" id="btn-export-purchase">Export BOM Requisition (CSV)</button>
         </section>
 
@@ -475,8 +467,8 @@
             <div class="kpi-icon icon-event">⚠️</div>
             <div class="kpi-details">
               <span class="kpi-label">Critical Shortage Items</span>
-              <span class="kpi-value" id="kpi-purchase-shortages" style="color:var(--accent-rose);">3 Materials</span>
-              <span class="kpi-trend highlight">Flour & Ghee reorder needed</span>
+              <span class="kpi-value" id="kpi-purchase-shortages" style="color:var(--accent-rose);">Loading...</span>
+              <span class="kpi-trend highlight">Advisory Buffer Check</span>
             </div>
           </div>
 
@@ -484,8 +476,8 @@
             <div class="kpi-icon icon-units">📑</div>
             <div class="kpi-details">
               <span class="kpi-label">Open Purchase Orders</span>
-              <span class="kpi-value" id="kpi-purchase-open-pos">5 Active POs</span>
-              <span class="kpi-trend positive">Awaiting Vendor Delivery</span>
+              <span class="kpi-value" id="kpi-purchase-open-pos">--</span>
+              <span class="kpi-trend positive">Integration Pending</span>
             </div>
           </div>
 
@@ -493,8 +485,8 @@
             <div class="kpi-icon icon-rev">₨</div>
             <div class="kpi-details">
               <span class="kpi-label">Est. Requisition Value</span>
-              <span class="kpi-value" id="kpi-purchase-total-cost">Rs 1,485,000.00</span>
-              <span class="kpi-trend neutral">7-Day Production Run</span>
+              <span class="kpi-value" id="kpi-purchase-total-cost">Loading...</span>
+              <span class="kpi-trend neutral">Planning Model</span>
             </div>
           </div>
 
@@ -502,8 +494,8 @@
             <div class="kpi-icon icon-conf">🛡️</div>
             <div class="kpi-details">
               <span class="kpi-label">Warehouse Safety Stock</span>
-              <span class="kpi-value">4.5 Days</span>
-              <span class="kpi-trend positive">Average buffer coverage</span>
+              <span class="kpi-value">--</span>
+              <span class="kpi-trend positive">Advisory Buffer</span>
             </div>
           </div>
         </section>

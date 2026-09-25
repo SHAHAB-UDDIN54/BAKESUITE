@@ -8,6 +8,9 @@ export const config = {
   nodeEnv: process.env.NODE_ENV || 'development',
   databaseUrl: process.env.DATABASE_URL || 'postgresql://postgres:@localhost:5432/bakesuite',
   mlServiceUrl: process.env.ML_SERVICE_URL || 'http://localhost:8000',
+  allowedOrigins: (process.env.ALLOWED_ORIGINS || 'http://localhost:3000,http://127.0.0.1:3000')
+    .split(',')
+    .map(o => o.trim()),
   regional: {
     currency: 'PKR',
     currencyPrefix: 'Rs',

@@ -447,11 +447,13 @@ def seed_transactions_and_demand(conn):
     # Build price lookup
     price_map = {p[0]: p[4] for p in PRODUCT_CATALOG}
 
-    # Generate complete, realistic 180-day operational dataset across 3 branches
-    # covering late 2016 to early 2017 with Ramadan and Eid uplift dynamics
-    start_date = date(2016, 10, 1)
-    end_date = date(2017, 4, 30)
-    current_d = start_date
+    # Generate complete, realistic operational dataset across 3 branches:
+    # 1. 2016-2017 historic training data (with Ramadan and Eid dynamics)
+    # 2. 2026 trailing operational actuals (March to September 18, 2026) directly leading into forward forecast
+    periods = [
+        (date(2016, 10, 1), date(2017, 4, 30)),
+        (date(2026, 3, 1), date(2026, 9, 18))
+    ]
 
     invoices = []
     invoice_lines = []
@@ -459,76 +461,78 @@ def seed_transactions_and_demand(conn):
 
     inv_counter = 1000
 
-    while current_d <= end_date:
-        dow = current_d.isoweekday()
-        # Friday (Jummah), Saturday, Sunday weekend spike (+50%)
-        is_weekend = dow in (5, 6, 7)
-        vol_multiplier = 1.6 if is_weekend else 1.0
+    for start_date, end_date in periods:
+        current_d = start_date
+        while current_d <= end_date:
+            dow = current_d.isoweekday()
+            # Friday (Jummah), Saturday, Sunday weekend spike (+50%)
+            is_weekend = dow in (5, 6, 7)
+            vol_multiplier = 1.6 if is_weekend else 1.0
 
-        for b in BRANCHES:
-            b_id = b[0]
-            # Base daily transactions per branch
-            num_tx = int(random.randint(65, 95) * vol_multiplier)
+            for b in BRANCHES:
+                b_id = b[0]
+                # Base daily transactions per branch
+                num_tx = int(random.randint(65, 95) * vol_multiplier)
 
-            for _ in range(num_tx):
-                inv_counter += 1
-                inv_id = f"INV-{current_d.strftime('%Y%m%d')}-{inv_counter}"
-                
-                # Hour based on business operating hours
-                hour = random.choices(
-                    [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21],
-                    weights=[5, 10, 12, 10, 8, 9, 7, 6, 7, 9, 11, 12, 8, 4]
-                )[0]
-                minute = random.randint(0, 59)
-                inv_time = datetime(current_d.year, current_d.month, current_d.day, hour, minute, 0,
-                                    tzinfo=zoneinfo.ZoneInfo("Asia/Karachi"))
+                for _ in range(num_tx):
+                    inv_counter += 1
+                    inv_id = f"INV-{current_d.strftime('%Y%m%d')}-{inv_counter}"
+                    
+                    # Hour based on business operating hours
+                    hour = random.choices(
+                        [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21],
+                        weights=[5, 10, 12, 10, 8, 9, 7, 6, 7, 9, 11, 12, 8, 4]
+                    )[0]
+                    minute = random.randint(0, 59)
+                    inv_time = datetime(current_d.year, current_d.month, current_d.day, hour, minute, 0,
+                                        tzinfo=zoneinfo.ZoneInfo("Asia/Karachi"))
 
-                daypart = "Morning" if hour < 12 else ("Afternoon" if hour < 17 else "Evening")
-                channel = random.choice(["TAKEAWAY", "TAKEAWAY", "DINE_IN", "DELIVERY"])
-                pay_method = random.choice(["CASH", "CASH", "CARD", "RAAST"])
+                    daypart = "Morning" if hour < 12 else ("Afternoon" if hour < 17 else "Evening")
+                    channel = random.choice(["TAKEAWAY", "TAKEAWAY", "DINE_IN", "DELIVERY"])
+                    pay_method = random.choice(["CASH", "CASH", "CARD", "RAAST"])
 
-                # Items per transaction (1 to 4 items)
-                n_items = random.choices([1, 2, 3, 4], weights=[40, 35, 18, 7])[0]
-                chosen_products = random.sample(PRODUCT_CATALOG, n_items)
+                    # Items per transaction (1 to 4 items)
+                    n_items = random.choices([1, 2, 3, 4], weights=[40, 35, 18, 7])[0]
+                    chosen_products = random.sample(PRODUCT_CATALOG, n_items)
 
-                total_net = 0.0
-                total_disc = 0.0
+                    total_net = 0.0
+                    total_disc = 0.0
 
-                for prod in chosen_products:
-                    sku_id = prod[0]
-                    base_p = prod[4]
-                    qty = random.choices([1, 2, 3], weights=[75, 20, 5])[0]
-                    line_net = round(base_p * qty, 2)
-                    disc = 0.0
-                    total_net += line_net
+                    for prod in chosen_products:
+                        sku_id = prod[0]
+                        base_p = prod[4]
+                        qty = random.choices([1, 2, 3], weights=[75, 20, 5])[0]
+                        line_net = round(base_p * qty, 2)
+                        disc = 0.0
+                        total_net += line_net
 
-                    invoice_lines.append((
-                        inv_id, sku_id, qty, base_p, line_net, disc
+                        invoice_lines.append((
+                            inv_id, sku_id, qty, base_p, line_net, disc
+                        ))
+
+                        # Daily demand aggregation
+                        key = (sku_id, b_id, current_d)
+                        if key not in daily_demand:
+                            daily_demand[key] = {
+                                "qty": 0, "sales": 0.0, "tx_count": 0,
+                                "morning": 0, "afternoon": 0, "evening": 0, "night": 0
+                            }
+                        d_stat = daily_demand[key]
+                        d_stat["qty"] += qty
+                        d_stat["sales"] += line_net
+                        d_stat["tx_count"] += 1
+                        if daypart == "Morning":
+                            d_stat["morning"] += qty
+                        elif daypart == "Afternoon":
+                            d_stat["afternoon"] += qty
+                        else:
+                            d_stat["evening"] += qty
+
+                    invoices.append((
+                        inv_id, b_id, current_d, inv_time, channel, total_net, total_disc, pay_method, False
                     ))
 
-                    # Daily demand aggregation
-                    key = (sku_id, b_id, current_d)
-                    if key not in daily_demand:
-                        daily_demand[key] = {
-                            "qty": 0, "sales": 0.0, "tx_count": 0,
-                            "morning": 0, "afternoon": 0, "evening": 0, "night": 0
-                        }
-                    d_stat = daily_demand[key]
-                    d_stat["qty"] += qty
-                    d_stat["sales"] += line_net
-                    d_stat["tx_count"] += 1
-                    if daypart == "Morning":
-                        d_stat["morning"] += qty
-                    elif daypart == "Afternoon":
-                        d_stat["afternoon"] += qty
-                    else:
-                        d_stat["evening"] += qty
-
-                invoices.append((
-                    inv_id, b_id, current_d, inv_time, channel, total_net, total_disc, pay_method, False
-                ))
-
-        current_d += timedelta(days=1)
+            current_d += timedelta(days=1)
 
     print(f"  [OK] Prepared {len(invoices)} invoices and {len(invoice_lines)} line items.")
 

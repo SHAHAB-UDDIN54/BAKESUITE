@@ -160,32 +160,97 @@ function downloadCSV(filename, csvContent) {
   showToast(`Exported ${filename}`, 'success');
 }
 
+const AUTH_TOKEN = 'admin-token';
+const AUTH_HEADERS = {
+  'Authorization': `Bearer ${AUTH_TOKEN}`,
+  'Content-Type': 'application/json'
+};
+
 // =========================================================================
 // MODULE 1: FORECAST WORKBENCH (AI-01) — REAL API INTEGRATION
 // =========================================================================
 
 /**
- * Loads real batch run metadata from backend
+ * Loads dynamic branches and categories from ERP Core
  */
-async function loadBatchInfo() {
+async function loadMetadata() {
   try {
-    const res = await fetch(`${API_BASE}/api/v1/ai/forecasts/batch-info`);
-    if (res.ok) {
-      const data = await res.json();
-      lastBatchInfo = data;
-      const batchTimeEl = document.getElementById('batch-run-time');
-      if (batchTimeEl) {
-        if (data.last_run_at) {
-          const dt = new Date(data.last_run_at);
-          const timeStr = dt.toLocaleTimeString('en-GB', { timeZone: 'Asia/Karachi', hour12: false });
-          batchTimeEl.textContent = `Last batch scored: ${timeStr} PKT (${data.skus_scored || 32} SKUs)`;
+    const [bRes, cRes] = await Promise.all([
+      fetch(`${API_BASE}/api/v1/ai/metadata/branches`, { headers: AUTH_HEADERS }),
+      fetch(`${API_BASE}/api/v1/ai/metadata/categories`, { headers: AUTH_HEADERS })
+    ]);
+
+    if (bRes.ok) {
+      const branches = await bRes.json();
+      const bSelect = document.getElementById('select-branch');
+      const bIndentSelect = document.getElementById('select-indent-branch');
+      if (bSelect && Array.isArray(branches) && branches.length > 0) {
+        const curVal = bSelect.value;
+        bSelect.innerHTML = branches.map(b => `<option value="${b.branch_id}">${b.branch_id}: ${b.branch_name || b.branch_id}</option>`).join('');
+        if (branches.some(b => b.branch_id === curVal)) bSelect.value = curVal;
+      }
+      if (bIndentSelect && Array.isArray(branches) && branches.length > 0) {
+        const curVal = bIndentSelect.value;
+        bIndentSelect.innerHTML = branches.map(b => `<option value="${b.branch_id}">${b.branch_id}: ${b.branch_name || b.branch_id}</option>`).join('');
+        if (branches.some(b => b.branch_id === curVal)) bIndentSelect.value = curVal;
+      }
+    }
+
+    if (cRes.ok) {
+      const cats = await cRes.json();
+      const cSelect = document.getElementById('select-category');
+      if (cSelect && Array.isArray(cats) && cats.length > 0) {
+        const curVal = cSelect.value;
+        const catMap = {
+          'BREAD': 'Breads & Traditional Loaves',
+          'CAKE': 'Cakes & Pastries',
+          'SAVORY': 'Savories & Hot Kitchen',
+          'SWEET': 'Traditional Sweets & Mithai',
+          'BEVERAGE': 'Beverages & Coffee'
+        };
+        const optionsHtml = cats.map(c => {
+          const id = typeof c === 'string' ? c : (c.category_id || c.name || '');
+          const label = catMap[id] || (typeof c === 'string' ? c : (c.category_name || id));
+          return `<option value="${id}">${label}</option>`;
+        }).join('');
+        cSelect.innerHTML = `<option value="ALL">All Categories (32 SKUs)</option>` + optionsHtml;
+        if (curVal && curVal !== 'undefined' && cats.some(c => (typeof c === 'string' ? c : c.category_id) === curVal)) {
+          cSelect.value = curVal;
         } else {
-          batchTimeEl.textContent = data.status || 'No batch run recorded';
+          cSelect.value = 'ALL';
         }
       }
     }
+  } catch (err) {
+    console.warn('[METADATA] Error loading dynamic metadata:', err);
+  }
+}
+
+/**
+ * Loads real batch run metadata from backend
+ */
+async function loadBatchInfo() {
+  const batchTimeEl = document.getElementById('batch-run-time');
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/ai/forecasts/batch-info`, { headers: AUTH_HEADERS });
+    if (res.ok) {
+      const data = await res.json();
+      lastBatchInfo = data;
+      if (batchTimeEl) {
+        if (data.status === 'Unavailable' || !data.last_run_at) {
+          batchTimeEl.textContent = 'Last batch: Unavailable';
+        } else {
+          const dt = new Date(data.last_run_at);
+          const timeStr = dt.toLocaleTimeString('en-GB', { timeZone: 'Asia/Karachi', hour12: false });
+          batchTimeEl.textContent = `Last batch: ${timeStr} PKT (${data.skus_scored || 32} SKUs)`;
+        }
+      }
+    } else {
+      if (batchTimeEl) batchTimeEl.textContent = 'Last batch: Unavailable';
+    }
   } catch (e) {
     console.warn('[WORKBENCH] Unable to load batch info:', e);
+    if (batchTimeEl) batchTimeEl.textContent = 'Last batch: Unavailable';
   }
 }
 
@@ -211,23 +276,19 @@ async function loadForecastData() {
   await loadBatchInfo();
 
   try {
-    let url = `${API_BASE}/api/v1/ai/forecasts/demand?branch_id=${encodeURIComponent(branchId)}`;
-    if (category && category !== 'ALL') {
-      url += `&category=${encodeURIComponent(category)}`;
-    }
-
-    const response = await fetch(url);
+    const url = `${API_BASE}/api/v1/ai/forecasts/demand?branch_id=${encodeURIComponent(branchId)}`;
+    const response = await fetch(url, { headers: AUTH_HEADERS });
 
     if (response.status === 422) {
       const err = await response.json();
       tbody.innerHTML = `
         <tr>
           <td colspan="11" style="text-align:center; padding: 30px; color: var(--accent-rose);">
-            <strong>Validation Error (422)</strong>: ${err.error || err.detail || 'Forecast horizon exceeded 35-day limit.'}
+            <strong>Validation Error (422)</strong>: ${err.error || err.detail || 'Forecast horizon cannot exceed 35 days.'}
           </td>
         </tr>
       `;
-      showToast('Forecast horizon cannot exceed 35 days (HTTP 422)', 'warning');
+      showToast('Forecast horizon cannot exceed 35 days.', 'warning');
       return;
     }
 
@@ -247,7 +308,7 @@ async function loadForecastData() {
       tbody.innerHTML = `
         <tr>
           <td colspan="11" style="text-align:center; padding: 35px; color: var(--text-muted);">
-            No forecast data found for the selected branch and category filters.
+            No forecast data found for the selected branch.
           </td>
         </tr>
       `;
@@ -301,7 +362,7 @@ function updateServiceStatusIndicator(isFallback) {
  * Dynamically computes KPI summary values strictly from loaded backend API records
  */
 function updateKpis(items) {
-  const list = items && items.length > 0 ? items : forecastData;
+  const list = items !== undefined ? items : forecastData;
   const totalUnits = list.reduce((sum, item) => sum + (item.override_quantity || item.p50_quantity || 0), 0);
   const totalRev = list.reduce((sum, item) => {
     const qty = item.override_quantity || item.p50_quantity || 0;
@@ -380,6 +441,12 @@ function filterAndRenderTable() {
       </tr>
     `;
     return;
+  }
+
+  // Automatically update chart to first SKU of newly filtered category if current SKU is not in category
+  if (!filtered.some(i => i.sku_id === selectedSkuId)) {
+    selectedSkuId = filtered[0].sku_id;
+    renderChart(selectedSkuId);
   }
 
   filtered.forEach(item => {
@@ -472,7 +539,7 @@ async function renderChart(targetSkuId) {
   if (!ctx) return;
 
   try {
-    const res = await fetch(`${API_BASE}/api/v1/ai/forecasts/chart-data?branch_id=${encodeURIComponent(branchId)}&sku_id=${encodeURIComponent(sku)}`);
+    const res = await fetch(`${API_BASE}/api/v1/ai/forecasts/chart-data?branch_id=${encodeURIComponent(branchId)}&sku_id=${encodeURIComponent(sku)}`, { headers: AUTH_HEADERS });
     if (!res.ok) {
       throw new Error(`Failed to fetch chart data: ${res.statusText}`);
     }
@@ -670,7 +737,7 @@ async function saveOverride() {
   try {
     const res = await fetch(`${API_BASE}/api/v1/ai/forecasts/override`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: AUTH_HEADERS,
       body: JSON.stringify({
         sku_id: currentOverrideItem.sku_id,
         branch_id: branchId,
@@ -705,7 +772,7 @@ async function revertOverride() {
   try {
     const res = await fetch(`${API_BASE}/api/v1/ai/forecasts/override/revert`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: AUTH_HEADERS,
       body: JSON.stringify({
         sku_id: currentOverrideItem.sku_id,
         branch_id: branchId,
@@ -834,7 +901,7 @@ async function triggerRealRescore() {
   try {
     const res = await fetch(`${API_BASE}/api/v1/ai/forecasts/rescore`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: AUTH_HEADERS,
       body: JSON.stringify({ items: itemsToRescore })
     });
 
@@ -899,29 +966,23 @@ function exportForecastCSV() {
 }
 
 // =========================================================================
-// MODULE 2: BRANCH INDENT PLAN (#view-indent) — REAL INVENTORY & AI DEMAND
+// MODULE 2: BRANCH INDENT PLAN (#view-indent) — ADVISORY PLANNING
 // =========================================================================
 
 function initializeIndents() {
   const branchId = document.getElementById('select-indent-branch')?.value || 'BR-KHI-01';
 
   indentData = forecastData.map((p, idx) => {
-    // Standard safety stock rule: 35% of AI expected daily demand
-    const p50 = p.override_quantity || p.p50_quantity || 30;
-    const safetyMin = Math.max(5, Math.round(p50 * 0.35));
-    // Representative shelf stock
-    const shelfStock = Math.max(2, Math.round(p50 * 0.40));
-    const suggested = Math.max(0, Math.round(p50 + safetyMin - shelfStock));
-
+    const p50 = p.override_quantity || p.p50_quantity || 0;
     return {
       sku_id: p.sku_id,
       sku_name: p.sku_name || p.sku_id,
       category_id: p.category_id || 'CAT',
-      shelf_stock: shelfStock,
-      safety_min: safetyMin,
+      shelf_stock: 'Integration Pending',
+      safety_min: 'Advisory Buffer',
       p50_demand: p50,
-      suggested_indent: suggested,
-      approved_qty: suggested,
+      suggested_indent: p50,
+      approved_qty: p50,
       status: 'Advisory Review'
     };
   });
@@ -944,14 +1005,13 @@ function filterAndRenderIndents() {
   const countEl = document.getElementById('indent-count-text');
   if (countEl) countEl.textContent = `Showing ${filtered.length} of ${indentData.length} advisory requisitions`;
 
-  const totalUnits = indentData.reduce((s, i) => s + i.approved_qty, 0);
+  const totalUnits = indentData.reduce((s, i) => s + (typeof i.approved_qty === 'number' ? i.approved_qty : 0), 0);
   const pendingCount = indentData.filter(i => i.status === 'Advisory Review').length;
-  const riskCount = indentData.filter(i => i.shelf_stock < i.safety_min).length;
 
   document.getElementById('kpi-indent-units').textContent = `${totalUnits.toLocaleString()} PCS`;
   document.getElementById('kpi-indent-pending').textContent = `${pendingCount} SKUs`;
-  document.getElementById('kpi-indent-dispatched').textContent = `0 SKUs (Review Pending)`;
-  document.getElementById('kpi-indent-risk').textContent = riskCount > 0 ? `${riskCount} SKUs Critical` : 'Safe Buffer';
+  document.getElementById('kpi-indent-dispatched').textContent = `Integration Pending`;
+  document.getElementById('kpi-indent-risk').textContent = `Advisory Buffer Intact`;
 
   if (filtered.length === 0) {
     tbody.innerHTML = '<tr><td colspan="9" style="text-align:center; padding: 25px; color: var(--text-muted);">No indents matching active criteria.</td></tr>';
@@ -968,10 +1028,10 @@ function filterAndRenderIndents() {
         </div>
       </td>
       <td><span class="cat-badge">${item.category_id}</span></td>
-      <td><span style="font-family:var(--font-mono); color:${item.shelf_stock < item.safety_min ? 'var(--accent-rose)' : 'inherit'};">${item.shelf_stock} PCS</span></td>
-      <td><span style="font-family:var(--font-mono); color:var(--text-secondary);">${item.safety_min} PCS</span></td>
+      <td><span style="font-family:var(--font-mono); color:var(--text-secondary); font-size:0.85rem;">Integration Pending</span></td>
+      <td><span style="font-family:var(--font-mono); color:var(--text-secondary); font-size:0.85rem;">Advisory Buffer</span></td>
       <td><span class="p50-val">${item.p50_demand} PCS</span></td>
-      <td><span style="font-family:var(--font-mono); font-weight:600;">${item.suggested_indent} PCS</span></td>
+      <td><span style="font-family:var(--font-mono); font-weight:600;">${item.suggested_indent} PCS*</span></td>
       <td>
         <div class="qty-stepper">
           <button class="btn-step" onclick="adjustIndentQty('${item.sku_id}', -5)">-</button>
@@ -1005,8 +1065,8 @@ function exportIndentsCSV() {
     i.sku_id,
     `"${i.sku_name.replace(/"/g, '""')}"`,
     i.category_id,
-    i.shelf_stock,
-    i.safety_min,
+    'Integration Pending',
+    'Advisory Buffer',
     i.p50_demand,
     i.suggested_indent,
     i.approved_qty,
@@ -1118,45 +1178,45 @@ function initializePurchaseMaterials() {
       material_id: 'MAT-FLR-01',
       material_name: 'Fine Maida Flour (Grade A Extra White)',
       category: 'Flours & Grains',
-      required_qty: 3850,
-      current_stock: 1200,
+      required_qty: 'Advisory Pending',
+      current_stock: 'Advisory Pending',
       unit_of_measure: 'KG',
       unit_price: 135.00,
       supplier: 'Punjab Flour Mills Ltd',
-      status: 'Advisory Shortage'
+      status: 'Advisory / Integration Pending'
     },
     {
       material_id: 'MAT-SGR-01',
       material_name: 'Premium Refined Castor Sugar',
       category: 'Sweeteners',
-      required_qty: 1650,
-      current_stock: 450,
+      required_qty: 'Advisory Pending',
+      current_stock: 'Advisory Pending',
       unit_of_measure: 'KG',
       unit_price: 155.00,
       supplier: 'Fauji Sugar Mills',
-      status: 'Advisory Shortage'
+      status: 'Advisory / Integration Pending'
     },
     {
       material_id: 'MAT-FAT-01',
       material_name: 'Bakery Shortening Ghee / Butterfat',
       category: 'Dairy & Fats',
-      required_qty: 920,
-      current_stock: 180,
+      required_qty: 'Advisory Pending',
+      current_stock: 'Advisory Pending',
       unit_of_measure: 'KG',
       unit_price: 680.00,
       supplier: 'Dalda Foods Industrial',
-      status: 'Advisory Shortage'
+      status: 'Advisory / Integration Pending'
     },
     {
       material_id: 'MAT-EGG-01',
       material_name: 'Fresh Farm Eggs (Grade A Large)',
       category: 'Dairy & Fats',
-      required_qty: 540,
-      current_stock: 620,
+      required_qty: 'Advisory Pending',
+      current_stock: 'Advisory Pending',
       unit_of_measure: 'Dozens',
       unit_price: 360.00,
       supplier: 'SB Poultry Farms',
-      status: 'Adequate Stock'
+      status: 'Advisory / Integration Pending'
     }
   ];
 }
@@ -1165,10 +1225,6 @@ function filterAndRenderPurchase() {
   const filterVal = document.getElementById('select-purchase-filter')?.value || 'ALL';
 
   const filtered = purchaseMaterials.filter(m => {
-    const shortfall = Math.max(0, m.required_qty - m.current_stock);
-    if (filterVal === 'SHORTAGE') return shortfall > (m.required_qty * 0.4);
-    if (filterVal === 'REORDER') return m.status === 'Advisory Shortage';
-    if (filterVal === 'ADEQUATE') return m.status === 'Adequate Stock';
     return true;
   });
 
@@ -1176,27 +1232,14 @@ function filterAndRenderPurchase() {
   if (!tbody) return;
   tbody.innerHTML = '';
 
-  document.getElementById('purchase-count-text').textContent = `Showing ${filtered.length} of ${purchaseMaterials.length} raw baking ingredients`;
+  document.getElementById('purchase-count-text').textContent = `Showing ${filtered.length} raw baking ingredients (Advisory)`;
 
-  const shortageCount = purchaseMaterials.filter(m => (m.required_qty - m.current_stock) > 0).length;
-  const totalCost = purchaseMaterials.reduce((sum, m) => {
-    const shortfall = Math.max(0, m.required_qty - m.current_stock);
-    return sum + (shortfall * m.unit_price);
-  }, 0);
-
-  document.getElementById('kpi-purchase-shortages').textContent = `${shortageCount} Materials`;
+  document.getElementById('kpi-purchase-shortages').textContent = `Advisory Check`;
   document.getElementById('kpi-purchase-open-pos').textContent = `ERP Integration Pending`;
-  document.getElementById('kpi-purchase-total-cost').textContent = formatPKR(totalCost);
-
-  if (filtered.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="10" style="text-align:center; padding: 25px; color: var(--text-muted);">No materials matching active urgency filter.</td></tr>';
-    return;
-  }
+  document.getElementById('kpi-purchase-total-cost').textContent = `Advisory Pending`;
 
   filtered.forEach(m => {
     const tr = document.createElement('tr');
-    const shortfall = Math.max(0, m.required_qty - m.current_stock);
-    const lineCost = shortfall * m.unit_price;
 
     tr.innerHTML = `
       <td>
@@ -1206,13 +1249,13 @@ function filterAndRenderPurchase() {
         </div>
       </td>
       <td><span class="cat-badge">${m.category}</span></td>
-      <td><span style="font-family:var(--font-mono); font-weight:600;">${m.required_qty.toLocaleString()} ${m.unit_of_measure}</span></td>
-      <td><span style="font-family:var(--font-mono); color:${m.current_stock < m.required_qty ? 'var(--accent-rose)' : 'inherit'};">${m.current_stock.toLocaleString()} ${m.unit_of_measure}</span></td>
-      <td><span style="font-family:var(--font-mono); font-weight:700; color:${shortfall > 0 ? 'var(--accent-rose)' : 'var(--text-muted)'};">${shortfall > 0 ? shortfall.toLocaleString() + ' ' + m.unit_of_measure : '—'}</span></td>
+      <td><span style="font-family:var(--font-mono); color:var(--text-secondary);">${m.required_qty}</span></td>
+      <td><span style="font-family:var(--font-mono); color:var(--text-secondary);">${m.current_stock}</span></td>
+      <td><span style="font-family:var(--font-mono); color:var(--text-muted);">Advisory Pending</span></td>
       <td><span style="font-family:var(--font-mono); color:var(--text-secondary);">${formatPKR(m.unit_price)}</span></td>
-      <td><span class="sales-val">${formatPKR(lineCost)}</span></td>
+      <td><span class="sales-val">Advisory Pending</span></td>
       <td><span style="color:var(--text-secondary); font-size:0.85rem;">${m.supplier}</span></td>
-      <td><span class="status-pill ${shortfall > 0 ? 'shortage' : 'approved'}">${m.status}</span></td>
+      <td><span class="status-pill pending">${m.status}</span></td>
       <td>
         <span style="font-size:0.75rem; color:var(--text-muted);">Advisory Prototype</span>
       </td>
@@ -1222,22 +1265,18 @@ function filterAndRenderPurchase() {
 }
 
 function exportPurchaseCSV() {
-  const headers = ['Material ID', 'Material Name', 'Category', 'Required (Bake Plan)', 'Warehouse Stock', 'Net Shortfall', 'Unit Rate (PKR)', 'Total Cost (PKR)', 'Supplier', 'PO Status'];
-  const rows = purchaseMaterials.map(m => {
-    const shortfall = Math.max(0, m.required_qty - m.current_stock);
-    return [
-      m.material_id,
-      `"${m.material_name.replace(/"/g, '""')}"`,
-      m.category,
-      m.required_qty,
-      m.current_stock,
-      shortfall,
-      m.unit_price,
-      shortfall * m.unit_price,
-      `"${m.supplier}"`,
-      m.status
-    ];
-  });
+  const headers = ['Material ID', 'Material Name', 'Category', 'Required (Bake Plan)', 'Warehouse Stock', 'Net Shortfall', 'Unit Rate (PKR)', 'Supplier', 'PO Status'];
+  const rows = purchaseMaterials.map(m => [
+    m.material_id,
+    `"${m.material_name.replace(/"/g, '""')}"`,
+    m.category,
+    m.required_qty,
+    m.current_stock,
+    'Advisory Pending',
+    m.unit_price,
+    `"${m.supplier}"`,
+    m.status
+  ]);
   const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
   downloadCSV(`bakesuite_mrp_requisition_${new Date().toISOString().split('T')[0]}.csv`, csv);
 }
@@ -1252,7 +1291,11 @@ function setupEventListeners() {
 
   // Forecast Workbench Filters & Actions
   document.getElementById('select-branch')?.addEventListener('change', () => loadForecastData());
-  document.getElementById('select-category')?.addEventListener('change', () => filterAndRenderTable());
+  document.getElementById('select-category')?.addEventListener('change', () => {
+    const searchInput = document.getElementById('input-search');
+    if (searchInput) searchInput.value = '';
+    filterAndRenderTable();
+  });
   document.getElementById('input-search')?.addEventListener('input', () => filterAndRenderTable());
   document.getElementById('btn-refresh-data')?.addEventListener('click', () => {
     loadForecastData();
@@ -1323,7 +1366,7 @@ function setupEventListeners() {
   // Purchase Requirements Listeners
   document.getElementById('select-purchase-filter')?.addEventListener('change', filterAndRenderPurchase);
   document.getElementById('btn-generate-po-all')?.addEventListener('click', () => {
-    showToast('Advisory Action: Purchase order issuance requires ERP procurement database.', 'info');
+    showToast('Purchase recommendations are advisory. Real purchase order release requires ERP Procurement module authorization & audit.', 'info');
   });
   document.getElementById('btn-export-purchase')?.addEventListener('click', exportPurchaseCSV);
 }
@@ -1332,8 +1375,10 @@ function setupEventListeners() {
 async function initWorkbench() {
   console.log('[WORKBENCH] Bootstrapping BakeSuite ERP Intelligence UI...');
   setupEventListeners();
+  await loadMetadata();
   await loadForecastData();
 }
 
 // DOM Ready
 document.addEventListener('DOMContentLoaded', initWorkbench);
+

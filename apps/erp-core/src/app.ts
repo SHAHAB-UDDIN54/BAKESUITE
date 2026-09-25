@@ -7,9 +7,21 @@ import { overridesRouter } from './routes/overrides.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
+import { config } from './config/index.js';
+
 const app = express();
 
-app.use(cors());
+// Restricted CORS per Requirement 38
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || config.allowedOrigins.includes(origin) || config.allowedOrigins.includes('*')) {
+      callback(null, true);
+    } else {
+      callback(new Error(`Origin ${origin} not allowed by CORS`));
+    }
+  },
+  credentials: true
+}));
 app.use(express.json());
 
 // Register API Routes

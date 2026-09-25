@@ -122,6 +122,22 @@ async function run() {
     }
     console.log('  [PASS] Rescore guardrail enforced: 501 items rejected with HTTP 422.');
 
+    // 6. Branch authorization & unauthorized branch rejection (HTTP 403)
+    console.log('  Testing server-side branch authorization...');
+    const unauthRes = await fetch(`${baseUrl}/api/v1/ai/forecasts/demand?branch_id=BR-KHI-01`, {
+      headers: { 'Authorization': 'Bearer lhr-manager-token' }
+    });
+    if (unauthRes.status !== 403) {
+      throw new Error(`Expected HTTP 403 for unauthorized branch access, got ${unauthRes.status}`);
+    }
+    const authRes = await fetch(`${baseUrl}/api/v1/ai/forecasts/demand?branch_id=BR-LHR-01`, {
+      headers: { 'Authorization': 'Bearer lhr-manager-token' }
+    });
+    if (!authRes.ok) {
+      throw new Error(`Expected 200 for authorized branch access, got ${authRes.status}`);
+    }
+    console.log('  [PASS] Branch authorization enforced: unauthorized branch returns HTTP 403, authorized branch returns 200.');
+
   } finally {
     server.close();
   }

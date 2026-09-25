@@ -37,7 +37,10 @@ class LightGBMQuantileModel:
         X = df.copy()
         for cat in CATEGORICAL_COLUMNS:
             if cat in X.columns:
-                X[cat] = X[cat].astype('category')
+                if self.category_encoders and cat in self.category_encoders:
+                    X[cat] = pd.Categorical(X[cat], categories=self.category_encoders[cat])
+                else:
+                    X[cat] = X[cat].astype('category')
         
         # Ensure all numeric feature columns exist
         for col in FEATURE_COLUMNS:
@@ -86,6 +89,9 @@ class LightGBMQuantileModel:
             booster = lgb.train(params, train_data, num_boost_round=150)
             self.boosters[alpha] = booster
 
+        self.category_encoders = {
+            c: X[c].cat.categories.tolist() for c in CATEGORICAL_COLUMNS if c in X.columns and hasattr(X[c], 'cat')
+        }
         self.is_fitted = True
 
     def predict_quantiles(self, df_features: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -156,3 +162,9 @@ class LightGBMQuantileModel:
             if os.path.exists(path):
                 self.boosters[alpha] = joblib.load(path)
         self.is_fitted = len(self.boosters) == 3
+        if self.is_fitted:
+            b = self.boosters.get(0.50)
+            if b and hasattr(b, 'pandas_categorical') and b.pandas_categorical:
+                self.category_encoders = {
+                    col: cats for col, cats in zip(CATEGORICAL_COLUMNS, b.pandas_categorical)
+                }
