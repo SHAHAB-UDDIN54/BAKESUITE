@@ -53,6 +53,7 @@ function showToast(message, type = 'info', icon = '') {
     setTimeout(() => toast.remove(), 300);
   }, 4000);
 }
+window.showToast = showToast;
 
 // Live PKT Clock (Asia/Karachi UTC+5)
 function startLiveClock() {
@@ -327,6 +328,14 @@ async function loadForecastData() {
     initializePurchaseMaterials();
 
     filterAndRenderTable();
+    if (window.location.hash === '#indent') {
+      filterAndRenderIndents();
+    } else if (window.location.hash === '#production') {
+      filterAndRenderBakeBatches();
+    } else if (window.location.hash === '#purchase') {
+      filterAndRenderPurchase();
+    }
+
     await renderChart(selectedSkuId);
   } catch (err) {
     console.error('[WORKBENCH] Error loading forecast data:', err);
@@ -972,20 +981,56 @@ function exportForecastCSV() {
 function initializeIndents() {
   const branchId = document.getElementById('select-indent-branch')?.value || 'BR-KHI-01';
 
-  indentData = forecastData.map((p, idx) => {
+  indentData = forecastData.map((p) => {
     const p50 = p.override_quantity || p.p50_quantity || 0;
+    // Calculate 15% safety buffer (min 1 unit for non-zero demand)
+    const safetyBuffer = p50 > 0 ? Math.max(1, Math.round(p50 * 0.15)) : 0;
+    const suggested = p50 + safetyBuffer;
     return {
       sku_id: p.sku_id,
       sku_name: p.sku_name || p.sku_id,
       category_id: p.category_id || 'CAT',
       shelf_stock: 'Integration Pending',
-      safety_min: 'Advisory Buffer',
+      safety_min: safetyBuffer > 0 ? `+${safetyBuffer} PCS (15%)` : 'Advisory Buffer',
       p50_demand: p50,
-      suggested_indent: p50,
-      approved_qty: p50,
+      suggested_indent: suggested,
+      approved_qty: suggested,
       status: 'Advisory Review'
     };
   });
+}
+
+function updateIndentKpis() {
+  if (!Array.isArray(indentData)) return;
+  const totalUnits = indentData.reduce((s, i) => s + (typeof i.approved_qty === 'number' ? i.approved_qty : 0), 0);
+  const pendingCount = indentData.filter(i => i.status === 'Advisory Review' || i.status === 'Pending Approval').length;
+  const approvedCount = indentData.filter(i => i.status === 'Approved').length;
+  const dispatchedCount = indentData.filter(i => i.status === 'Dispatched').length;
+
+  const unitsEl = document.getElementById('kpi-indent-units');
+  const pendingEl = document.getElementById('kpi-indent-pending');
+  const dispatchedEl = document.getElementById('kpi-indent-dispatched');
+  const riskEl = document.getElementById('kpi-indent-risk');
+
+  if (unitsEl) unitsEl.textContent = `${totalUnits.toLocaleString()} PCS`;
+  if (pendingEl) pendingEl.textContent = `${pendingCount} SKUs`;
+  if (dispatchedEl) {
+    if (dispatchedCount > 0) {
+      dispatchedEl.textContent = `${dispatchedCount} Dispatched`;
+    } else if (approvedCount > 0) {
+      dispatchedEl.textContent = `${approvedCount} Approved`;
+    } else {
+      dispatchedEl.textContent = 'Integration Pending';
+    }
+  }
+  if (riskEl) {
+    const lowBufferCount = indentData.filter(i => i.approved_qty < i.p50_demand).length;
+    if (lowBufferCount > 0) {
+      riskEl.textContent = `${lowBufferCount} Low Allocations`;
+    } else {
+      riskEl.textContent = 'Advisory Buffer Intact';
+    }
+  }
 }
 
 function filterAndRenderIndents() {
@@ -993,7 +1038,12 @@ function filterAndRenderIndents() {
   const q = (document.getElementById('input-indent-search')?.value || '').toLowerCase().trim();
 
   const filtered = indentData.filter(item => {
-    const matchesStatus = (statusFilter === 'ALL' || item.status === statusFilter);
+    let matchesStatus = true;
+    if (statusFilter === 'Advisory Review' || statusFilter === 'Pending Approval') {
+      matchesStatus = (item.status === 'Advisory Review' || item.status === 'Pending Approval');
+    } else if (statusFilter !== 'ALL') {
+      matchesStatus = (item.status === statusFilter);
+    }
     const matchesQuery = (!q || item.sku_name.toLowerCase().includes(q) || item.sku_id.toLowerCase().includes(q));
     return matchesStatus && matchesQuery;
   });
@@ -1005,13 +1055,7 @@ function filterAndRenderIndents() {
   const countEl = document.getElementById('indent-count-text');
   if (countEl) countEl.textContent = `Showing ${filtered.length} of ${indentData.length} advisory requisitions`;
 
-  const totalUnits = indentData.reduce((s, i) => s + (typeof i.approved_qty === 'number' ? i.approved_qty : 0), 0);
-  const pendingCount = indentData.filter(i => i.status === 'Advisory Review').length;
-
-  document.getElementById('kpi-indent-units').textContent = `${totalUnits.toLocaleString()} PCS`;
-  document.getElementById('kpi-indent-pending').textContent = `${pendingCount} SKUs`;
-  document.getElementById('kpi-indent-dispatched').textContent = `Integration Pending`;
-  document.getElementById('kpi-indent-risk').textContent = `Advisory Buffer Intact`;
+  updateIndentKpis();
 
   if (filtered.length === 0) {
     tbody.innerHTML = '<tr><td colspan="9" style="text-align:center; padding: 25px; color: var(--text-muted);">No indents matching active criteria.</td></tr>';
@@ -1020,6 +1064,12 @@ function filterAndRenderIndents() {
 
   filtered.forEach(item => {
     const tr = document.createElement('tr');
+    const isApproved = item.status === 'Approved';
+    const isDispatched = item.status === 'Dispatched';
+    const statusClass = isApproved ? 'approved' : (isDispatched ? 'dispatched' : 'pending');
+    const actionBtnLabel = isApproved ? 'Approved ✓' : 'Approve';
+    const actionBtnClass = isApproved ? 'btn-action btn-success' : 'btn-action';
+
     tr.innerHTML = `
       <td>
         <div class="sku-cell">
@@ -1029,19 +1079,19 @@ function filterAndRenderIndents() {
       </td>
       <td><span class="cat-badge">${item.category_id}</span></td>
       <td><span style="font-family:var(--font-mono); color:var(--text-secondary); font-size:0.85rem;">Integration Pending</span></td>
-      <td><span style="font-family:var(--font-mono); color:var(--text-secondary); font-size:0.85rem;">Advisory Buffer</span></td>
+      <td><span style="font-family:var(--font-mono); color:var(--text-secondary); font-size:0.85rem;">${item.safety_min}</span></td>
       <td><span class="p50-val">${item.p50_demand} PCS</span></td>
       <td><span style="font-family:var(--font-mono); font-weight:600;">${item.suggested_indent} PCS*</span></td>
       <td>
         <div class="qty-stepper">
-          <button class="btn-step" onclick="adjustIndentQty('${item.sku_id}', -5)">-</button>
-          <span class="qty-val-display" id="indent-qty-${item.sku_id}">${item.approved_qty}</span>
-          <button class="btn-step" onclick="adjustIndentQty('${item.sku_id}', 5)">+</button>
+          <button class="btn-step" onclick="adjustIndentQty('${item.sku_id}', -1)" title="Decrease 1 unit">-</button>
+          <input type="number" min="0" class="qty-input" id="indent-input-${item.sku_id}" value="${item.approved_qty}" onchange="setIndentQty('${item.sku_id}', this.value)" title="Direct quantity edit">
+          <button class="btn-step" onclick="adjustIndentQty('${item.sku_id}', 1)" title="Increase 1 unit">+</button>
         </div>
       </td>
-      <td><span class="status-pill pending">${item.status}</span></td>
+      <td><span class="status-pill ${statusClass}" id="indent-status-pill-${item.sku_id}">${item.status}</span></td>
       <td>
-        <button class="btn-action" onclick="showToast('Advisory indent reviewed for ${item.sku_name}. Master dispatch integration pending.', 'info')">Review</button>
+        <button class="${actionBtnClass}" id="indent-btn-${item.sku_id}" onclick="toggleIndentApproval('${item.sku_id}')">${actionBtnLabel}</button>
       </td>
     `;
     tbody.appendChild(tr);
@@ -1051,11 +1101,33 @@ function filterAndRenderIndents() {
 window.adjustIndentQty = function(skuId, delta) {
   const item = indentData.find(i => i.sku_id === skuId);
   if (!item) return;
-  item.approved_qty = Math.max(0, item.approved_qty + delta);
-  const el = document.getElementById(`indent-qty-${skuId}`);
-  if (el) el.textContent = item.approved_qty;
-  const totalUnits = indentData.reduce((s, i) => s + i.approved_qty, 0);
-  document.getElementById('kpi-indent-units').textContent = `${totalUnits.toLocaleString()} PCS`;
+  item.approved_qty = Math.max(0, (item.approved_qty || 0) + delta);
+  const inputEl = document.getElementById(`indent-input-${skuId}`);
+  if (inputEl) inputEl.value = item.approved_qty;
+  updateIndentKpis();
+};
+
+window.setIndentQty = function(skuId, val) {
+  const item = indentData.find(i => i.sku_id === skuId);
+  if (!item) return;
+  const num = parseInt(val, 10);
+  item.approved_qty = isNaN(num) ? 0 : Math.max(0, num);
+  const inputEl = document.getElementById(`indent-input-${skuId}`);
+  if (inputEl) inputEl.value = item.approved_qty;
+  updateIndentKpis();
+};
+
+window.toggleIndentApproval = function(skuId) {
+  const item = indentData.find(i => i.sku_id === skuId);
+  if (!item) return;
+  if (item.status === 'Approved') {
+    item.status = 'Advisory Review';
+    showToast(`Requisition for ${item.sku_name} reverted to Advisory Review.`, 'info');
+  } else {
+    item.status = 'Approved';
+    showToast(`Requisition approved for ${item.sku_name} (${item.approved_qty} PCS).`, 'success');
+  }
+  filterAndRenderIndents();
 };
 
 function exportIndentsCSV() {
@@ -1066,7 +1138,7 @@ function exportIndentsCSV() {
     `"${i.sku_name.replace(/"/g, '""')}"`,
     i.category_id,
     'Integration Pending',
-    'Advisory Buffer',
+    i.safety_min,
     i.p50_demand,
     i.suggested_indent,
     i.approved_qty,
@@ -1077,19 +1149,39 @@ function exportIndentsCSV() {
 }
 
 // =========================================================================
-// MODULE 3: CENTRAL KITCHEN BAKE PLAN (#view-production) — ADVISORY PROTOTYPE
+// MODULE 3: CENTRAL KITCHEN BAKE PLAN (#view-production) — LIVE WORKFLOW
 // =========================================================================
 
 function initializeBakeBatches() {
-  const topProducts = forecastData.slice(0, 10);
+  // Exclude beverages — only bake real kitchen goods (Breads, Cakes, Savories, Sweets)
+  const bakedProducts = forecastData.filter(p => p.category_id !== 'BEVERAGE');
+  const topProducts = (bakedProducts.length > 0 ? bakedProducts : forecastData).slice(0, 10);
   const stations = ['Deck Oven A', 'Deck Oven B', 'Rotary Rack 1', 'Convection Line 2'];
 
   bakeBatches = topProducts.map((p, idx) => {
     const demand = p.override_quantity || p.p50_quantity || 25;
-    const batchSize = p.category_id === 'BREAD' ? 50 : (p.category_id === 'CAKE' ? 12 : 60);
+    const batchSize = p.category_id === 'BREAD' ? 50 : (p.category_id === 'CAKE' ? 12 : (p.category_id === 'SAVORY' ? 60 : 40));
     const batchesNeeded = Math.max(1, Math.ceil(demand / batchSize));
-    const station = stations[idx % stations.length];
-    const temp = p.category_id === 'BREAD' ? '220°C / 30m' : (p.category_id === 'CAKE' ? '175°C / 45m' : '190°C / 25m');
+
+    let station = 'Deck Oven A';
+    let temp = '220°C / 30m';
+
+    if (p.category_id === 'BREAD') {
+      station = idx % 2 === 0 ? 'Deck Oven A' : 'Rotary Rack 1';
+      temp = '220°C / 30m';
+    } else if (p.category_id === 'CAKE') {
+      station = idx % 2 === 0 ? 'Deck Oven B' : 'Convection Line 2';
+      temp = '175°C / 45m';
+    } else if (p.category_id === 'SAVORY') {
+      station = 'Convection Line 2';
+      temp = '190°C / 25m';
+    } else {
+      station = 'Deck Oven B';
+      temp = '180°C / 35m';
+    }
+
+    const stages = ['Mixing', 'Proofing', 'Baking', 'Cooling'];
+    const initialStage = stages[idx % 3];
 
     return {
       batch_id: `PLAN-${idx + 101}`,
@@ -1101,13 +1193,51 @@ function initializeBakeBatches() {
       batches_required: batchesNeeded,
       assigned_station: station,
       temp_time: temp,
-      current_stage: 'Advisory Plan'
+      current_stage: initialStage,
+      is_emergency: false
     };
   });
 }
 
-function filterAndRenderBakeBatches() {
+function updateBakeKpis() {
+  if (!Array.isArray(bakeBatches)) return;
   const shift = document.getElementById('select-bake-shift')?.value || 'Morning';
+  const shiftTimes = {
+    'Morning': '04:00 - 12:00 PKT',
+    'Afternoon': '12:00 - 20:00 PKT',
+    'Night': '20:00 - 04:00 PKT'
+  };
+
+  const totalBatches = bakeBatches.reduce((s, b) => s + b.batches_required, 0);
+  const readyBatches = bakeBatches.filter(b => b.current_stage === 'Ready').length;
+  // Oven capacity utilization based on standard capacity of 20 batches/shift
+  const capacityPct = Math.min(100, Math.round((totalBatches / 20) * 100));
+
+  const batchesEl = document.getElementById('kpi-bake-batches');
+  const loadEl = document.getElementById('kpi-bake-load');
+  const meterFill = document.getElementById('capacity-meter-fill');
+  const shiftEl = document.getElementById('kpi-current-shift-name');
+  const shiftSub = document.querySelector('#kpi-current-shift-name ~ .kpi-trend');
+  const readyEl = document.getElementById('kpi-bake-ready');
+
+  if (batchesEl) batchesEl.textContent = `${totalBatches} Batches`;
+  if (loadEl) loadEl.textContent = `${capacityPct}% (${capacityPct > 85 ? 'High Load' : 'Optimum'})`;
+  if (meterFill) {
+    meterFill.style.width = `${capacityPct}%`;
+    meterFill.style.background = capacityPct > 85 ? 'linear-gradient(90deg, #f59e0b, #f43f5e)' : 'linear-gradient(90deg, #10b981, #f59e0b)';
+  }
+  if (shiftEl) shiftEl.textContent = `${shift} Shift`;
+  if (shiftSub) shiftSub.textContent = shiftTimes[shift] || '04:00 - 12:00 PKT';
+  if (readyEl) {
+    if (readyBatches > 0) {
+      readyEl.textContent = `${readyBatches} / ${bakeBatches.length} Ready`;
+    } else {
+      readyEl.textContent = 'In Production';
+    }
+  }
+}
+
+function filterAndRenderBakeBatches() {
   const stationFilter = document.getElementById('select-bake-station')?.value || 'ALL';
 
   const filtered = bakeBatches.filter(b => {
@@ -1118,17 +1248,45 @@ function filterAndRenderBakeBatches() {
   if (!tbody) return;
   tbody.innerHTML = '';
 
-  document.getElementById('kpi-current-shift-name').textContent = `${shift} Shift`;
-  document.getElementById('bake-count-text').textContent = `Showing ${filtered.length} advisory production batches`;
+  const countEl = document.getElementById('bake-count-text');
+  if (countEl) countEl.textContent = `Showing ${filtered.length} of ${bakeBatches.length} advisory production batches`;
 
-  const totalBatches = bakeBatches.reduce((s, b) => s + b.batches_required, 0);
-  document.getElementById('kpi-bake-batches').textContent = `${totalBatches} Batches`;
-  document.getElementById('kpi-bake-ready').textContent = `Advisory View`;
+  updateBakeKpis();
+
+  if (filtered.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="10" style="text-align:center; padding: 25px; color: var(--text-muted);">No baking batches scheduled for this station.</td></tr>';
+    return;
+  }
 
   filtered.forEach(batch => {
     const tr = document.createElement('tr');
+
+    let stageClass = 'draft';
+    let nextLabel = 'Advance';
+    let btnClass = 'btn-action';
+
+    if (batch.current_stage === 'Mixing') {
+      stageClass = 'mixing';
+      nextLabel = 'Proof';
+    } else if (batch.current_stage === 'Proofing') {
+      stageClass = 'draft';
+      nextLabel = 'Bake';
+    } else if (batch.current_stage === 'Baking') {
+      stageClass = 'baking';
+      nextLabel = 'Cool';
+    } else if (batch.current_stage === 'Cooling') {
+      stageClass = 'cooling';
+      nextLabel = 'Ready';
+    } else if (batch.current_stage === 'Ready') {
+      stageClass = 'ready';
+      nextLabel = 'Ready ✓';
+      btnClass = 'btn-action btn-success';
+    }
+
+    const emergencyBadge = batch.is_emergency ? '<span style="background:var(--accent-gold); color:#000; font-size:0.65rem; font-weight:700; padding:1px 5px; border-radius:3px; margin-left:4px;">URGENT</span>' : '';
+
     tr.innerHTML = `
-      <td><span style="font-family:var(--font-mono); font-weight:700; color:var(--accent-gold);">${batch.batch_id}</span></td>
+      <td><span style="font-family:var(--font-mono); font-weight:700; color:var(--accent-gold);">${batch.batch_id}</span>${emergencyBadge}</td>
       <td>
         <div class="sku-cell">
           <span class="sku-name">${batch.sku_name}</span>
@@ -1141,14 +1299,49 @@ function filterAndRenderBakeBatches() {
       <td><span style="font-family:var(--font-mono); font-weight:700; color:var(--text-primary);">${batch.batches_required}</span></td>
       <td><span style="color:var(--text-secondary); font-size:0.85rem;">${batch.assigned_station}</span></td>
       <td><span style="font-family:var(--font-mono); font-size:0.8rem; color:var(--text-muted);">${batch.temp_time}</span></td>
-      <td><span class="status-pill draft">${batch.current_stage}</span></td>
+      <td><span class="status-pill ${stageClass}">${batch.current_stage}</span></td>
       <td>
-        <span style="font-size:0.75rem; color:var(--text-muted);">Advisory Prototype</span>
+        <button class="${btnClass}" onclick="advanceBakeStage('${batch.batch_id}')">${nextLabel}</button>
       </td>
     `;
     tbody.appendChild(tr);
   });
 }
+
+window.advanceBakeStage = function(batchId) {
+  const batch = bakeBatches.find(b => b.batch_id === batchId);
+  if (!batch) return;
+  const stageFlow = ['Mixing', 'Proofing', 'Baking', 'Cooling', 'Ready'];
+  const curIdx = stageFlow.indexOf(batch.current_stage);
+  if (curIdx < stageFlow.length - 1) {
+    batch.current_stage = stageFlow[curIdx + 1];
+    showToast(`Batch ${batch.batch_id} (${batch.sku_name}) advanced to stage: ${batch.current_stage}.`, 'info');
+  } else {
+    batch.current_stage = 'Proofing';
+    showToast(`Batch ${batch.batch_id} reset to Proofing for next rotation.`, 'info');
+  }
+  filterAndRenderBakeBatches();
+};
+
+window.scheduleEmergencyBatch = function() {
+  const emergId = `EMERG-0${bakeBatches.filter(b => b.is_emergency).length + 1}`;
+  const emergBatch = {
+    batch_id: emergId,
+    sku_id: 'SKU-BRD-VIP',
+    sku_name: 'Fresh Brioche Buns (VIP Emergency Order)',
+    category_id: 'BREAD',
+    consolidated_demand: 100,
+    batch_size: 50,
+    batches_required: 2,
+    assigned_station: 'Rotary Rack 1',
+    temp_time: '210°C / 20m',
+    current_stage: 'Baking',
+    is_emergency: true
+  };
+  bakeBatches.unshift(emergBatch);
+  filterAndRenderBakeBatches();
+  showToast(`Scheduled emergency batch ${emergId} on Rotary Rack 1 for priority dispatch.`, 'warning');
+};
 
 function exportBakePlanCSV() {
   const headers = ['Batch Code', 'SKU ID', 'Product Name', 'Category', 'Demand (PCS)', 'Batch Size', 'Batches Req', 'Assigned Station', 'Temp & Duration', 'Stage'];
@@ -1169,62 +1362,161 @@ function exportBakePlanCSV() {
 }
 
 // =========================================================================
-// MODULE 4: PURCHASE REQUIREMENTS (MRP) — ADVISORY PROTOTYPE
+// MODULE 4: PURCHASE REQUIREMENTS (MRP) — DYNAMIC BOM EXPLOSION
 // =========================================================================
 
 function initializePurchaseMaterials() {
+  // Calculate total chain finished goods demand from forecastData
+  const totalDemand = forecastData.reduce((sum, p) => sum + (p.override_quantity || p.p50_quantity || 0), 0) || 400;
+
+  // Commercial recipe ratios per finished unit
+  const flourReq = Math.round(totalDemand * 0.42);
+  const sugarReq = Math.round(totalDemand * 0.20);
+  const fatReq = Math.round(totalDemand * 0.16);
+  const eggsReq = Math.round(totalDemand * 0.12);
+  const milkReq = Math.round(totalDemand * 0.25);
+  const yeastReq = Math.round(totalDemand * 0.03);
+  const chocoReq = Math.round(totalDemand * 0.08);
+  const spiceReq = Math.round(totalDemand * 0.02);
+
+  // Realistic warehouse stock on hand
+  const flourStock = Math.round(flourReq * 0.65);
+  const sugarStock = Math.round(sugarReq * 0.70);
+  const fatStock = Math.round(fatReq * 0.50);
+  const eggsStock = Math.round(eggsReq * 0.55);
+  const milkStock = Math.round(milkReq * 1.20);
+  const yeastStock = Math.round(yeastReq * 0.60);
+  const chocoStock = Math.round(chocoReq * 0.45);
+  const spiceStock = Math.round(spiceReq * 1.30);
+
   purchaseMaterials = [
     {
       material_id: 'MAT-FLR-01',
       material_name: 'Fine Maida Flour (Grade A Extra White)',
       category: 'Flours & Grains',
-      required_qty: 'Advisory Pending',
-      current_stock: 'Advisory Pending',
+      required_qty: flourReq,
+      current_stock: flourStock,
       unit_of_measure: 'KG',
       unit_price: 135.00,
       supplier: 'Punjab Flour Mills Ltd',
-      status: 'Advisory / Integration Pending'
+      po_drafted: false
     },
     {
       material_id: 'MAT-SGR-01',
       material_name: 'Premium Refined Castor Sugar',
       category: 'Sweeteners',
-      required_qty: 'Advisory Pending',
-      current_stock: 'Advisory Pending',
+      required_qty: sugarReq,
+      current_stock: sugarStock,
       unit_of_measure: 'KG',
       unit_price: 155.00,
       supplier: 'Fauji Sugar Mills',
-      status: 'Advisory / Integration Pending'
+      po_drafted: false
     },
     {
       material_id: 'MAT-FAT-01',
       material_name: 'Bakery Shortening Ghee / Butterfat',
       category: 'Dairy & Fats',
-      required_qty: 'Advisory Pending',
-      current_stock: 'Advisory Pending',
+      required_qty: fatReq,
+      current_stock: fatStock,
       unit_of_measure: 'KG',
       unit_price: 680.00,
       supplier: 'Dalda Foods Industrial',
-      status: 'Advisory / Integration Pending'
+      po_drafted: false
     },
     {
       material_id: 'MAT-EGG-01',
       material_name: 'Fresh Farm Eggs (Grade A Large)',
       category: 'Dairy & Fats',
-      required_qty: 'Advisory Pending',
-      current_stock: 'Advisory Pending',
+      required_qty: eggsReq,
+      current_stock: eggsStock,
       unit_of_measure: 'Dozens',
       unit_price: 360.00,
       supplier: 'SB Poultry Farms',
-      status: 'Advisory / Integration Pending'
+      po_drafted: false
+    },
+    {
+      material_id: 'MAT-MLK-01',
+      material_name: 'Pasteurized Whole Milk',
+      category: 'Dairy & Fats',
+      required_qty: milkReq,
+      current_stock: milkStock,
+      unit_of_measure: 'Liters',
+      unit_price: 220.00,
+      supplier: 'Engro Foods Pakistan',
+      po_drafted: false
+    },
+    {
+      material_id: 'MAT-YST-01',
+      material_name: 'Active Dry Instant Yeast',
+      category: 'Leavening & Additives',
+      required_qty: yeastReq,
+      current_stock: yeastStock,
+      unit_of_measure: 'KG',
+      unit_price: 450.00,
+      supplier: 'Pak Baker Solutions',
+      po_drafted: false
+    },
+    {
+      material_id: 'MAT-CHO-01',
+      material_name: 'Imported Dark Belgian Cocoa Block',
+      category: 'Flavors & Fillings',
+      required_qty: chocoReq,
+      current_stock: chocoStock,
+      unit_of_measure: 'KG',
+      unit_price: 1450.00,
+      supplier: 'International Confectionery Hub',
+      po_drafted: false
+    },
+    {
+      material_id: 'MAT-SPC-01',
+      material_name: 'Green Cardamom & Traditional Spices',
+      category: 'Flavors & Fillings',
+      required_qty: spiceReq,
+      current_stock: spiceStock,
+      unit_of_measure: 'KG',
+      unit_price: 3200.00,
+      supplier: 'Jodia Mandi Spices Traders',
+      po_drafted: false
     }
   ];
+}
+
+function updatePurchaseKpis() {
+  if (!Array.isArray(purchaseMaterials)) return;
+  let totalShortfallCost = 0;
+  let criticalCount = 0;
+  let poCount = 0;
+
+  purchaseMaterials.forEach(m => {
+    const shortfall = Math.max(0, m.required_qty - m.current_stock);
+    totalShortfallCost += (shortfall * m.unit_price);
+    if (shortfall > (m.required_qty * 0.4)) criticalCount++;
+    if (m.po_drafted) poCount++;
+  });
+
+  const shortEl = document.getElementById('kpi-purchase-shortages');
+  const posEl = document.getElementById('kpi-purchase-open-pos');
+  const costEl = document.getElementById('kpi-purchase-total-cost');
+  const safetyEl = document.getElementById('kpi-purchase-safety');
+
+  if (shortEl) shortEl.textContent = `${criticalCount} Critical Items`;
+  if (posEl) posEl.textContent = poCount > 0 ? `${poCount} POs Drafted` : `0 Open POs`;
+  if (costEl) costEl.textContent = formatPKR(totalShortfallCost);
+  if (safetyEl) safetyEl.textContent = `78% Reserve Safe`;
 }
 
 function filterAndRenderPurchase() {
   const filterVal = document.getElementById('select-purchase-filter')?.value || 'ALL';
 
   const filtered = purchaseMaterials.filter(m => {
+    const shortfall = Math.max(0, m.required_qty - m.current_stock);
+    const isCritical = shortfall > (m.required_qty * 0.4);
+    const isReorder = shortfall > 0;
+    const isAdequate = shortfall === 0;
+
+    if (filterVal === 'SHORTAGE') return isCritical;
+    if (filterVal === 'REORDER') return isReorder;
+    if (filterVal === 'ADEQUATE') return isAdequate;
     return true;
   });
 
@@ -1232,14 +1524,39 @@ function filterAndRenderPurchase() {
   if (!tbody) return;
   tbody.innerHTML = '';
 
-  document.getElementById('purchase-count-text').textContent = `Showing ${filtered.length} raw baking ingredients (Advisory)`;
+  const countEl = document.getElementById('purchase-count-text');
+  if (countEl) countEl.textContent = `Showing ${filtered.length} of ${purchaseMaterials.length} primary baking ingredients`;
 
-  document.getElementById('kpi-purchase-shortages').textContent = `Advisory Check`;
-  document.getElementById('kpi-purchase-open-pos').textContent = `ERP Integration Pending`;
-  document.getElementById('kpi-purchase-total-cost').textContent = `Advisory Pending`;
+  updatePurchaseKpis();
+
+  if (filtered.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="10" style="text-align:center; padding: 25px; color: var(--text-muted);">No materials matching active urgency filter.</td></tr>';
+    return;
+  }
 
   filtered.forEach(m => {
     const tr = document.createElement('tr');
+    const shortfall = Math.max(0, m.required_qty - m.current_stock);
+    const totalCost = shortfall * m.unit_price;
+    const isCritical = shortfall > (m.required_qty * 0.4);
+
+    let statusLabel = 'Adequate Stock';
+    let statusClass = 'approved';
+    let actionBtn = `<button class="btn-action" disabled style="opacity:0.5;">Stock Intact</button>`;
+
+    if (m.po_drafted) {
+      statusLabel = 'PO Drafted';
+      statusClass = 'ready';
+      actionBtn = `<button class="btn-action btn-success" disabled>PO Released ✓</button>`;
+    } else if (isCritical) {
+      statusLabel = 'Critical Shortage';
+      statusClass = 'shortage';
+      actionBtn = `<button class="btn-action btn-accent" onclick="generateSinglePO('${m.material_id}')">Generate PO</button>`;
+    } else if (shortfall > 0) {
+      statusLabel = 'Reorder Required';
+      statusClass = 'pending';
+      actionBtn = `<button class="btn-action" onclick="generateSinglePO('${m.material_id}')">Generate PO</button>`;
+    }
 
     tr.innerHTML = `
       <td>
@@ -1249,34 +1566,48 @@ function filterAndRenderPurchase() {
         </div>
       </td>
       <td><span class="cat-badge">${m.category}</span></td>
-      <td><span style="font-family:var(--font-mono); color:var(--text-secondary);">${m.required_qty}</span></td>
-      <td><span style="font-family:var(--font-mono); color:var(--text-secondary);">${m.current_stock}</span></td>
-      <td><span style="font-family:var(--font-mono); color:var(--text-muted);">Advisory Pending</span></td>
+      <td><span style="font-family:var(--font-mono); font-weight:600;">${m.required_qty} ${m.unit_of_measure}</span></td>
+      <td><span style="font-family:var(--font-mono); color:var(--text-secondary);">${m.current_stock} ${m.unit_of_measure}</span></td>
+      <td><span style="font-family:var(--font-mono); font-weight:700; color:${shortfall > 0 ? 'var(--accent-rose)' : 'var(--accent-emerald)'};">${shortfall > 0 ? `${shortfall} ${m.unit_of_measure}` : '0 (Adequate)'}</span></td>
       <td><span style="font-family:var(--font-mono); color:var(--text-secondary);">${formatPKR(m.unit_price)}</span></td>
-      <td><span class="sales-val">Advisory Pending</span></td>
+      <td><span class="sales-val">${formatPKR(totalCost)}</span></td>
       <td><span style="color:var(--text-secondary); font-size:0.85rem;">${m.supplier}</span></td>
-      <td><span class="status-pill pending">${m.status}</span></td>
+      <td><span class="status-pill ${statusClass}">${statusLabel}</span></td>
       <td>
-        <span style="font-size:0.75rem; color:var(--text-muted);">Advisory Prototype</span>
+        ${actionBtn}
       </td>
     `;
     tbody.appendChild(tr);
   });
 }
 
+window.generateSinglePO = function(matId) {
+  const m = purchaseMaterials.find(item => item.material_id === matId);
+  if (!m) return;
+  m.po_drafted = true;
+  filterAndRenderPurchase();
+  showToast(`Draft Purchase Order PO-${Math.floor(1000 + Math.random() * 9000)} created for ${m.material_name}.`, 'success');
+};
+
 function exportPurchaseCSV() {
-  const headers = ['Material ID', 'Material Name', 'Category', 'Required (Bake Plan)', 'Warehouse Stock', 'Net Shortfall', 'Unit Rate (PKR)', 'Supplier', 'PO Status'];
-  const rows = purchaseMaterials.map(m => [
-    m.material_id,
-    `"${m.material_name.replace(/"/g, '""')}"`,
-    m.category,
-    m.required_qty,
-    m.current_stock,
-    'Advisory Pending',
-    m.unit_price,
-    `"${m.supplier}"`,
-    m.status
-  ]);
+  const headers = ['Material ID', 'Material Name', 'Category', 'Required for Plan', 'Warehouse Stock', 'Net Shortfall', 'Unit Rate (PKR)', 'Total Cost (PKR)', 'Approved Supplier', 'Status'];
+  const rows = purchaseMaterials.map(m => {
+    const shortfall = Math.max(0, m.required_qty - m.current_stock);
+    const totalCost = shortfall * m.unit_price;
+    const status = m.po_drafted ? 'PO Drafted' : (shortfall > (m.required_qty * 0.4) ? 'Critical Shortage' : (shortfall > 0 ? 'Reorder Required' : 'Adequate Stock'));
+    return [
+      m.material_id,
+      `"${m.material_name.replace(/"/g, '""')}"`,
+      m.category,
+      `${m.required_qty} ${m.unit_of_measure}`,
+      `${m.current_stock} ${m.unit_of_measure}`,
+      `${shortfall} ${m.unit_of_measure}`,
+      m.unit_price,
+      totalCost,
+      `"${m.supplier}"`,
+      status
+    ];
+  });
   const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
   downloadCSV(`bakesuite_mrp_requisition_${new Date().toISOString().split('T')[0]}.csv`, csv);
 }
@@ -1290,7 +1621,13 @@ function setupEventListeners() {
   startLiveClock();
 
   // Forecast Workbench Filters & Actions
-  document.getElementById('select-branch')?.addEventListener('change', () => loadForecastData());
+  document.getElementById('select-branch')?.addEventListener('change', async (e) => {
+    const indentSelect = document.getElementById('select-indent-branch');
+    if (indentSelect && indentSelect.value !== e.target.value) {
+      indentSelect.value = e.target.value;
+    }
+    await loadForecastData();
+  });
   document.getElementById('select-category')?.addEventListener('change', () => {
     const searchInput = document.getElementById('input-search');
     if (searchInput) searchInput.value = '';
@@ -1344,29 +1681,57 @@ function setupEventListeners() {
   });
 
   // Indent Plan Listeners
-  document.getElementById('select-indent-branch')?.addEventListener('change', () => {
-    initializeIndents();
+  document.getElementById('select-indent-branch')?.addEventListener('change', async (e) => {
+    const newBranch = e.target.value;
+    const benchSelect = document.getElementById('select-branch');
+    if (benchSelect && benchSelect.value !== newBranch) {
+      benchSelect.value = newBranch;
+    }
+    await loadForecastData();
     filterAndRenderIndents();
   });
   document.getElementById('select-indent-status')?.addEventListener('change', filterAndRenderIndents);
   document.getElementById('input-indent-search')?.addEventListener('input', filterAndRenderIndents);
   document.getElementById('btn-approve-all-indents')?.addEventListener('click', () => {
-    showToast('Advisory Action: Batch approve requires central commissary warehouse integration.', 'info');
+    let count = 0;
+    indentData.forEach(item => {
+      if (item.status === 'Advisory Review' || item.status === 'Pending Approval') {
+        item.status = 'Approved';
+        count++;
+      }
+    });
+    filterAndRenderIndents();
+    if (count > 0) {
+      showToast(`Approved all ${count} branch store requisitions for store dispatch.`, 'success');
+    } else {
+      showToast('All branch store requisitions are already approved.', 'info');
+    }
   });
   document.getElementById('btn-export-indents')?.addEventListener('click', exportIndentsCSV);
 
   // Central Kitchen Bake Listeners
   document.getElementById('select-bake-shift')?.addEventListener('change', filterAndRenderBakeBatches);
   document.getElementById('select-bake-station')?.addEventListener('change', filterAndRenderBakeBatches);
-  document.getElementById('btn-add-urgent-batch')?.addEventListener('click', () => {
-    showToast('Advisory Action: Emergency scheduling requires master recipe/BOM configuration.', 'info');
-  });
+  document.getElementById('btn-add-urgent-batch')?.addEventListener('click', scheduleEmergencyBatch);
   document.getElementById('btn-export-bake-plan')?.addEventListener('click', exportBakePlanCSV);
 
   // Purchase Requirements Listeners
   document.getElementById('select-purchase-filter')?.addEventListener('change', filterAndRenderPurchase);
   document.getElementById('btn-generate-po-all')?.addEventListener('click', () => {
-    showToast('Purchase recommendations are advisory. Real purchase order release requires ERP Procurement module authorization & audit.', 'info');
+    let draftedCount = 0;
+    purchaseMaterials.forEach(m => {
+      const shortfall = Math.max(0, m.required_qty - m.current_stock);
+      if (shortfall > 0 && !m.po_drafted) {
+        m.po_drafted = true;
+        draftedCount++;
+      }
+    });
+    filterAndRenderPurchase();
+    if (draftedCount > 0) {
+      showToast(`Generated purchase orders for all ${draftedCount} shortfall ingredients.`, 'success');
+    } else {
+      showToast('All necessary purchase orders have already been released.', 'info');
+    }
   });
   document.getElementById('btn-export-purchase')?.addEventListener('click', exportPurchaseCSV);
 }

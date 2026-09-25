@@ -1037,6 +1037,31 @@ body {
   text-align: center;
 }
 
+.qty-input {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 2px 4px;
+  width: 48px;
+  text-align: center;
+  background: transparent;
+  color: var(--text-primary);
+  border: none;
+  outline: none;
+  -moz-appearance: textfield;
+}
+
+.qty-input:focus {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 2px;
+}
+
+.qty-input::-webkit-outer-spin-button,
+.qty-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
 /* Toast Container */
 .toast-container {
   position: fixed;
