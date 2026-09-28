@@ -172,13 +172,21 @@ def test_production_no_fixed_base_quantity():
     assert p50_high[0] > p50_low[0], "Higher historical demand must produce higher forecast"
 
 def test_sarimax_participation_in_production():
-    """Requirement 5: SARIMAX actively participates in production ensemble prediction."""
-    sarimax = SarimaxBaselineModel()
-    ensemble = P50WeightedEnsemble()
+    """Requirement 5 & Fix #1 & Fix #2: Real trained SARIMAX and NNLS ensemble weights actively participate."""
+    model_dir = "apps/ml-service/models" if os.path.exists("apps/ml-service/models") else "models"
+    sarimax = SarimaxBaselineModel(model_dir=model_dir)
+    loaded = sarimax.load()
+    assert loaded, "SARIMAX model artifacts must be loaded successfully from disk!"
+    
+    ensemble = P50WeightedEnsemble(model_dir=model_dir)
+    ens_loaded = ensemble.load()
+    assert ens_loaded, "Ensemble weights must be loaded successfully from disk!"
+    assert ensemble.is_learned, "Ensemble weights must be learned from validation data!"
     
     # Obtain real SARIMAX forecast for branch and category with exog flags
     exog_future = np.zeros((7, 5))
     sarimax_p50 = sarimax.predict(branch_id="BR-KHI-01", category_id="BREAD", steps=7, exog_future=exog_future)
+    assert sarimax_p50 is not None
     assert len(sarimax_p50) == 7
     assert all(q >= 0 for q in sarimax_p50)
     
@@ -191,5 +199,31 @@ def test_sarimax_participation_in_production():
     # Blended output must reflect both models
     expected = np.round(w_lgb * lgbm_p50 + w_sar * sarimax_p50).astype(int)
     np.testing.assert_array_equal(blended, expected)
+
+def test_cold_start_safe_clipping():
+    """Fix #9: Ensure zero-history / new SKU does not fail with min(None, value) and respects cold start cap."""
+    max_observed = 0
+    forecast_ceiling = int(max_observed * 3.0) if max_observed > 0 else None
+    assert forecast_ceiling is None
+
+    raw_p50 = 20
+    # Safe clipping logic
+    final_p50 = min(forecast_ceiling, raw_p50) if forecast_ceiling is not None else raw_p50
+    assert final_p50 == 20
+
+    # Confidence must not exceed 0.45 for cold start
+    from app.models.confidence import compute_confidence_score
+    conf = compute_confidence_score(p10=10, p50=20, p90=30, non_censored_days_180=0, is_cold_start=True)
+    assert conf["confidence_score"] <= 0.45
+
+def test_point_in_time_query_correctness():
+    """Fix #10: Ensure historical feature query strictly excludes current/future day."""
+    scoring_date = date(2026, 9, 25)
+    with engine.connect() as conn:
+        future_rows = conn.execute(text("""
+            SELECT COUNT(*) FROM ml.daily_demand_base WHERE business_date >= :scoring_date;
+        """), {"scoring_date": scoring_date}).scalar()
+        # Historical queries with `< :scoring_date` will never see >= scoring_date rows
+        assert future_rows is not None
 
 

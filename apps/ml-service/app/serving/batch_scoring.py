@@ -106,15 +106,15 @@ def run_35_day_batch_scoring(feature_date: Optional[date] = None) -> Dict[str, A
         
         max_demand_map = {(r[0], r[1]): int(r[2]) for r in max_demand_rows}
 
-        # Trailing history up to as_at_date for feature extraction
+        # Trailing history strictly prior to as_at_date for point-in-time safe feature extraction (Fix #10)
         hist_rows = conn.execute(text("""
             SELECT sku_id, branch_id, business_date, total_quantity, stockout_censored_flag
             FROM ml.daily_demand_base
-            WHERE business_date <= :as_at_date
+            WHERE business_date < :as_at_date
             ORDER BY sku_id, branch_id, business_date ASC;
         """), {"as_at_date": as_at_date}).fetchall()
 
-        # Calendar event records for next 35 days
+        # Calendar event records for next 35 days (including today as_at_date as day 1 of forward plan)
         horizon_end = as_at_date + timedelta(days=35)
         cal_rows = conn.execute(text("""
             SELECT 
@@ -123,7 +123,7 @@ def run_35_day_batch_scoring(feature_date: Optional[date] = None) -> Dict[str, A
                 days_to_eid_ul_fitr, days_to_eid_ul_adha, muharram_flag,
                 salary_week_flag, day_of_week, is_weekend_spike
             FROM ml.fg_calendar_day
-            WHERE gregorian_date > :start AND gregorian_date <= :end
+            WHERE gregorian_date >= :start AND gregorian_date < :end
             ORDER BY gregorian_date ASC;
         """), {"start": as_at_date, "end": horizon_end}).fetchall()
         cal_map = {r[0]: r for r in cal_rows}
@@ -131,7 +131,7 @@ def run_35_day_batch_scoring(feature_date: Optional[date] = None) -> Dict[str, A
         # Check weather availability
         weather_count = conn.execute(text("""
             SELECT COUNT(*) FROM ml.weather_daily
-            WHERE weather_date > :start AND weather_date <= :end;
+            WHERE weather_date >= :start AND weather_date < :end;
         """), {"start": as_at_date, "end": horizon_end}).scalar()
         weather_available = (weather_count or 0) > 0
 
@@ -149,9 +149,11 @@ def run_35_day_batch_scoring(feature_date: Optional[date] = None) -> Dict[str, A
     lgbm_model = LightGBMQuantileModel(model_dir=models_dir)
     lgbm_model.load()
 
-    # Initialize SARIMAX & Weighted Ensemble
-    sarimax_model = SarimaxBaselineModel()
-    ensemble = P50WeightedEnsemble()
+    # Initialize and load real persisted SARIMAX & Weighted Ensemble (Fix #1 & Fix #2)
+    sarimax_model = SarimaxBaselineModel(model_dir=models_dir)
+    sarimax_model.load()
+    ensemble = P50WeightedEnsemble(model_dir=models_dir)
+    ensemble.load()
 
     # Model version tracking
     champion_version = "lgbm-v1.0-quantile"
@@ -164,7 +166,7 @@ def run_35_day_batch_scoring(feature_date: Optional[date] = None) -> Dict[str, A
 
     forecast_rows = []
     total_expected_revenue = 0.0
-    forecast_dates = [as_at_date + timedelta(days=d) for d in range(1, 36)]
+    forecast_dates = [as_at_date + timedelta(days=d) for d in range(0, 35)]
 
     # 2. Iterate through each SKU and Branch
     for prod in products:
@@ -282,8 +284,8 @@ def run_35_day_batch_scoring(feature_date: Optional[date] = None) -> Dict[str, A
                 )
                 for cp in cold_preds:
                     f_d = datetime.strptime(cp["forecast_date"], "%Y-%m-%d").date()
-                    p10 = cp["p10_quantity"]
-                    p50 = min(forecast_ceiling, cp["p50_quantity"])
+                    # Fix #9: Cold-start safe clipping (do not call min(None, value))
+                    p50 = min(forecast_ceiling, cp["p50_quantity"]) if forecast_ceiling is not None else cp["p50_quantity"]
                     p90 = max(p50, cp["p90_quantity"])
                     rev = round(p50 * base_price, 2)
                     total_expected_revenue += rev

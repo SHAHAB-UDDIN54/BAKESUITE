@@ -1,0 +1,34 @@
+{
+  "model_type": "SARIMAX(1,0,0)x(1,0,0,7)",
+  "model_version": "sarimax-v1.0-seasonal",
+  "saved_at": "2026-09-25T12:28:59.396050+00:00",
+  "fitted_series_count": 18,
+  "fitted_series": [
+    "BR-ISB-01:BEVERAGE",
+    "BR-ISB-01:BREAD",
+    "BR-ISB-01:CAKE",
+    "BR-ISB-01:PASTRY",
+    "BR-ISB-01:SAVORY",
+    "BR-ISB-01:SWEET",
+    "BR-KHI-01:BEVERAGE",
+    "BR-KHI-01:BREAD",
+    "BR-KHI-01:CAKE",
+    "BR-KHI-01:PASTRY",
+    "BR-KHI-01:SAVORY",
+    "BR-KHI-01:SWEET",
+    "BR-LHR-01:BEVERAGE",
+    "BR-LHR-01:BREAD",
+    "BR-LHR-01:CAKE",
+    "BR-LHR-01:PASTRY",
+    "BR-LHR-01:SAVORY",
+    "BR-LHR-01:SWEET"
+  ],
+  "exogenous_features": [
+    "is_weekend_spike",
+    "ramadan_flag",
+    "last_ten_nights_flag",
+    "chand_raat_flag",
+    "holiday_flag"
+  ],
+  "status": "READY"
+}

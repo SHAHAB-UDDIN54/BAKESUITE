@@ -1,0 +1,24 @@
+{
+  "version": "ensemble-v1.0-nnls",
+  "method": "Constrained NNLS (Non-negative Least Squares, sum=1.0)",
+  "saved_at": "2026-09-25T12:29:02.381478+00:00",
+  "is_learned": true,
+  "branch_weights": {
+    "BR-KHI-01": [
+      0.983,
+      0.017
+    ],
+    "BR-LHR-01": [
+      0.987,
+      0.013
+    ],
+    "BR-ISB-01": [
+      0.981,
+      0.019
+    ],
+    "DEFAULT": [
+      0.75,
+      0.25
+    ]
+  }
+}

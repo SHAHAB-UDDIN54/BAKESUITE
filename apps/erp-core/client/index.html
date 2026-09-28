@@ -226,7 +226,7 @@
       <section id="view-indent" class="view-panel hidden">
         <div class="advisory-banner">
           <span class="advisory-icon">ℹ️</span>
-          <span><strong>Advisory Planning View</strong>: Requisitions calculated from latest branch stock movements and AI P50 demand. Human review required prior to store dispatch.</span>
+          <span><strong>Advisory Planning View</strong>: Requisitions calculated from AI P50 forecast demand + store safety buffer. Full ERP physical shelf inventory, open transfers, and logistics dispatch execution pending.</span>
         </div>
         <section class="filter-section">
           <div class="filter-group">
@@ -334,7 +334,7 @@
       <section id="view-production" class="view-panel hidden">
         <div class="advisory-banner">
           <span class="advisory-icon">⚠️</span>
-          <span><strong>Advisory Prototype View</strong>: Master Recipe/BOM & commercial deck/rotary oven equipment scheduling integration pending. Schedules are advisory planning models.</span>
+          <span><strong>Advisory Bake Planning View</strong>: Master Recipe/BOM & commercial deck/rotary oven equipment scheduling are advisory models for planning. Physical bakery equipment telemetry, automated oven controls, and manufacturing execution are not directly connected.</span>
         </div>
         <section class="filter-section">
           <div class="filter-group">
@@ -357,7 +357,7 @@
             </select>
           </div>
 
-          <button class="btn-action btn-accent" id="btn-add-urgent-batch">Schedule Emergency Batch</button>
+          <button class="btn-action btn-accent" id="btn-add-urgent-batch">Schedule Advisory Emergency Batch (Planning)</button>
           <button class="btn-action" id="btn-export-bake-plan">Print Bake Sheet (CSV)</button>
         </section>
 
@@ -444,7 +444,7 @@
       <section id="view-purchase" class="view-panel hidden">
         <div class="advisory-banner">
           <span class="advisory-icon">⚠️</span>
-          <span><strong>Advisory Prototype View</strong>: Central procurement ERP database integration pending. Automatic purchase order creation is disabled.</span>
+          <span><strong>Advisory Purchase Planning View</strong>: Central procurement ERP database integration pending. Requisitions are generated for advisory raw material planning purposes only without automated PO issuance to suppliers.</span>
         </div>
         <section class="filter-section">
           <div class="filter-group">

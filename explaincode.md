@@ -1,303 +1,277 @@
-# BakeSuite — Complete Project Codebase File-by-File Summary (`explaincode.md`)
+# BakeSuite — Aasan Zaban Mein Poora Project Guide (`explaincode.md`)
 
-Yeh document BakeSuite project ki har aik file ka **short, crisp, aur to-the-point summary** provide karta hai taake code ka maqsad aur usmein istemal shuda technologies foran samajh aa sakein.
-
----
-
-## 1. Python ML Microservice (`apps/ml-service/`)
-
-### `apps/ml-service/main.py`
-* **Work / Maqsad:** Python FastAPI application ka main entry point hai jo ML service ko boot karta hai, CORS configure karta hai, aur API routes register karta hai.
-* **Used / Tech:** `FastAPI`, `CORSMiddleware`, Uvicorn ASGI server, `health_router`, `forecast_router`.
-
-### `apps/ml-service/config.py`
-* **Work / Maqsad:** ML service ke environment variables aur configurations ko load aur validate karta hai (DB credentials, Redis host, model paths, ports).
-* **Used / Tech:** `pydantic-settings`, `BaseSettings`, OS environment reading.
-
-### `apps/ml-service/requirements.txt`
-* **Work / Maqsad:** ML microservice ke تمام Python packages aur unke exact versions define karta hai.
-* **Used / Tech:** `fastapi`, `uvicorn`, `lightgbm`, `statsmodels`, `scikit-learn`, `psycopg2-binary`, `redis`, `numpy`, `pandas`, `pytest`.
-
-### `apps/ml-service/Dockerfile`
-* **Work / Maqsad:** ML service ko containerize karne ke liye lightweight Python 3.12 Docker image build karta hai.
-* **Used / Tech:** `python:3.12-slim`, multi-stage builds, port 8000 exposure.
-
-### `apps/ml-service/.env.example`
-* **Work / Maqsad:** ML service ke required environment variables ka sample template provide karta hai.
+Yeh document BakeSuite project ke tamam sawalat, concepts, folders aur testing rules ko aasan **Roman Urdu aur English** mein step-by-step samjhata hai.
 
 ---
 
-### ML API Endpoints (`apps/ml-service/app/api/`)
+## Fihrist (Table of Contents)
 
-### `apps/ml-service/app/api/health.py`
-* **Work / Maqsad:** Liveness aur readiness health-check endpoints provide karta hai jo DB aur Redis connectivity report karte hain.
-* **Used / Tech:** `APIRouter`, `/health`, `/ready`, psycopg2 connection ping, Redis ping.
-
-### `apps/ml-service/app/api/forecast.py`
-* **Work / Maqsad:** Demand forecasting ke API endpoints expose karta hai: single-item inference, batch scoring, aur on-demand rescoring.
-* **Used / Tech:** `APIRouter`, Pydantic request/response schemas, `BatchScorer`, `FeatureParityService`.
-
----
-
-### Core Data & Cache (`apps/ml-service/app/core/`)
-
-### `apps/ml-service/app/core/db.py`
-* **Work / Maqsad:** PostgreSQL 16 database ke connection pools banata hai aur queries execute karne ke helper functions deta hai.
-* **Used / Tech:** `psycopg2.pool.ThreadedConnectionPool`, context manager `get_db_connection()`.
-
-### `apps/ml-service/app/core/cache.py`
-* **Work / Maqsad:** Redis caching layer manage karta hai taake frequent predictions instant serve hon.
-* **Used / Tech:** `redis.Redis`, key-value caching, TTL expiration (15 minutes).
+1. [Frontend aur Backend Chalane Ki Commands](#1-frontend-aur-backend-chalane-ki-commands)
+2. [CORS Error aur Uska Hal (Port 5500 Live Server)](#2-cors-error-aur-uska-hal)
+3. [SKU Kya Hota Hai? (Stock Keeping Unit)](#3-sku-kya-hota-hai)
+4. [Testing Phase Ke Faislay (Testing Decisions & Rules)](#4-testing-phase-ke-faislay)
+5. [Kubernetes aur DevOps Files (`k8s/` Folder)](#5-kubernetes-aur-devops-files-k8s-folder)
+6. [`node_modules` Folder Kya Hai?](#6-nodemodules-folder-kya-hai)
+7. [`scripts/` Folder Ki Files Ka Kaam](#7-scripts-folder-ki-files-ka-kaam)
+8. [`apps/erp-core` Folder (Frontend + Node API)](#8-appserp-core-folder)
+9. [`apps/ml-service` Folder (Python AI Microservice)](#9-appsml-service-folder)
+10. [`data/` Folder aur Sales Dataset Ka Istemal](#10-data-folder-aur-sales-dataset-ka-istemal)
+11. [Tamam Items aur Categories Ki Master List (32 Products)](#11-tamam-items-aur-categories-ki-master-list)
+12. [Is Project Mein Docker Kyun Use Hua?](#12-is-project-mein-docker-kyun-use-hua)
 
 ---
 
-### Feature Engineering (`apps/ml-service/app/features/`)
+## 1. Frontend aur Backend Chalane Ki Commands
 
-### `apps/ml-service/app/features/feature_extractor.py`
-* **Work / Maqsad:** Raw transaction sales se machine learning features extract karta hai: lags (7, 14, 21, 28 days), rolling averages, seasonal cyclical encoding (sin/cos of day of year), aur Hijri lunar flags.
-* **Used / Tech:** `pandas`, `numpy`, cyclical feature math, lag shifting.
+BakeSuite mein do main systems hain: **ERP Core (Frontend + Node Backend)** aur **ML Service (Python AI Backend)**.
 
----
+### Tareeqa A: Dono Ko Ek Sath Chalana (Single Command)
+Project root folder (`d:\BAKESUITE`) mein yeh command chalayein:
+```powershell
+npm run dev
+```
+*Yeh `concurrently` package ke zariye ERP aur ML dono servers ko ek hi terminal window mein color-coded chala deta hai.*
 
-### Machine Learning Models (`apps/ml-service/app/models/`)
+### Tareeqa B: Alag Alag Terminals Mein Chalana (Recommended)
+Agar aap chahein ke dono ke logs alag alag terminals mein nazar aayein:
 
-### `apps/ml-service/app/models/lgbm_quantiles.py`
-* **Work / Maqsad:** Main production model hai jo LightGBM Quantile Regression ke 3 separate models train/predict karta hai: P10 (alpha=0.1), P50 (alpha=0.5), P90 (alpha=0.9). Quantile crossing guardrail enforce karta hai ($P10 \le P50 \le P90$).
-* **Used / Tech:** `lightgbm.LGBMRegressor(objective='quantile')`, `joblib`, pinball loss evaluation.
+* **Terminal 1 — Frontend UI + ERP Backend API:**
+  ```powershell
+  npm run dev:erp
+  ```
+  * **Frontend Web Dashboard:** [http://localhost:3000](http://localhost:3000)
+  * **API Health Check:** [http://localhost:3000/api/v1/health](http://localhost:3000/api/v1/health)
 
-### `apps/ml-service/app/models/sarimax_baseline.py`
-* **Work / Maqsad:** Statistical baseline model jo time-series seasonality aur exogenous calendar variables (Ramadan, weekends) ko model karta hai.
-* **Used / Tech:** `statsmodels.tsa.statespace.sarimax.SARIMAX`.
-
-### `apps/ml-service/app/models/baseline_fallback.py`
-* **Work / Maqsad:** Statistical fallback engine jo zero ML dependency ke sath pichlay 4 hafton ke same-weekday demand medians nikalta hai.
-* **Used / Tech:** Pure statistical median calculation, zero model drift.
-
-### `apps/ml-service/app/models/cold_start.py`
-* **Work / Maqsad:** Naye products (New SKUs) jinki sales history nahi hoti, unke liye category-level hierarchical pooling se forecast banata hai.
-* **Used / Tech:** Category aggregation, Bayesian shrinkage priors.
-
-### `apps/ml-service/app/models/confidence.py`
-* **Work / Maqsad:** Har prediction ke sath 0% se 100% ka statistical confidence score generate karta hai (data density, historical variance, aur prediction interval width ki base par).
-* **Used / Tech:** Prediction interval ratio formula: $1 - \frac{P90 - P10}{P50 \times 2}$.
-
-### `apps/ml-service/app/models/ensemble.py`
-* **Work / Maqsad:** LightGBM aur SARIMAX predictions ko blend karke optimal ensemble output banata hai.
-* **Used / Tech:** Weighted quantile combination.
-
-### `apps/ml-service/app/models/hurdle_intermittent.py`
-* **Work / Maqsad:** Intermittent (kabhi bikne wale) items ke liye Croston / Two-stage Hurdle model chalata hai (Pehla stage: bikne ka probability; Dusra stage: quantity).
-* **Used / Tech:** Logistic regression + Zero-inflated Poisson/Gamma regressor.
-
-### `apps/ml-service/app/models/registry.py`
-* **Work / Maqsad:** Trained models ke binary artifact files (`.pkl`) ko disk se load, cache, aur version control karta hai.
-* **Used / Tech:** `joblib.load()`, singleton model cache.
+* **Terminal 2 — Python AI / ML Forecast Service:**
+  ```powershell
+  npm run dev:ml
+  ```
+  * **ML Service API:** [http://localhost:8000](http://localhost:8000)
+  * **Interactive Swagger Docs:** [http://localhost:8000/docs](http://localhost:8000/docs)
+  * **ML Health Check:** [http://localhost:8000/health](http://localhost:8000/health)
 
 ---
 
-### ML Services & Serving (`apps/ml-service/app/services/` & `serving/`)
+## 2. CORS Error aur Uska Hal
 
-### `apps/ml-service/app/services/feature_parity.py`
-* **Work / Maqsad:** Ensure karta hai ke training time ke features aur online inference time ke features mein 100% mathematical parity ho (No data leakage).
-* **Used / Tech:** Strict schema validator, calendar feature alignment.
+### Masla (Why it happened):
+Jab aapne frontend ko **VS Code Live Server** (Port `5500`: `http://127.0.0.1:5500`) ke zariye khola, to backend ne request block kar di:
+```
+Error: Origin http://127.0.0.1:5500 not allowed by CORS
+```
+Kyunke ERP backend sirf `http://localhost:3000` se aane wali requests allow kar raha tha.
 
-### `apps/ml-service/app/services/drift_monitoring.py`
-* **Work / Maqsad:** Population Stability Index (PSI) aur Kolmogorov-Smirnov (KS) test se feature drift aur concept drift detect karta hai.
-* **Used / Tech:** `scipy.stats.ks_2samp`, PSI formula calculation.
-
-### `apps/ml-service/app/services/retraining_trigger.py`
-* **Work / Maqsad:** Agar drift threshold cross ho ya naya data aayee to automatic retraining trigger karta hai.
-* **Used / Tech:** Background task scheduler, alert webhooks.
-
-### `apps/ml-service/app/serving/batch_scoring.py`
-* **Work / Maqsad:** Nightly batch inference engine jo tamam 32 SKUs aur 3 branches ke 35-day forward predictions calculate karke database table `ml.pred_demand_daily` mein bulk insert karta hai.
-* **Used / Tech:** Multi-threaded batch scoring, bulk database transaction inserts.
+### Hal (How it was fixed):
+1. **[`apps/erp-core/src/config/index.ts`](file:///d:/BAKESUITE/apps/erp-core/src/config/index.ts)** mein `allowedOrigins` list mein `http://localhost:5500`, `http://127.0.0.1:5500`, `http://localhost:5173`, aur `http://127.0.0.1:5173` add kar diye gaye.
+2. **[`apps/erp-core/src/app.ts`](file:///d:/BAKESUITE/apps/erp-core/src/app.ts)** mein regex check lagaya gaya ke development mode mein local computer ke kisi bhi port se request aaye to reject na ho.
+3. Express error handler add kiya gaya taake unhandled error se server crash na ho.
 
 ---
 
-### ML Training Pipeline (`apps/ml-service/app/training/`)
+## 3. SKU Kya Hota Hai?
 
-### `apps/ml-service/app/training/train_pipeline.py`
-* **Work / Maqsad:** Historical demand data uthata hai, features banata hai, LightGBM P10/P50/P90 models ko train karta hai aur artifacts ko `models/` directory mein save karta hai.
-* **Used / Tech:** `lightgbm`, TimeSeriesSplit cross-validation, `joblib.dump`.
+* **SKU ka full form:** **Stock Keeping Unit**.
+* **Aasan Matlab:** Har aik product aur uske size/flavor ka aik **unique identification code**.
+* **Kyun zaroori hai?** 
+  Agar aap sirf "Bread" likhein ge to system ko nahi pata chalega ke Plain Large Bread hai, Bran Bread hai, ya Sourdough. Har aik ka weight, qeemat, shelf-life aur ingredients alag hote hain, is liye har product ko alag SKU ID di jati hai.
 
-### `apps/ml-service/app/training/backtest_engine.py`
-* **Work / Maqsad:** Expanding window backtesting engine jo Chapter 5 SRS metrics (WAPE, Pinball Loss, Coverage) evaluate karta hai.
-* **Used / Tech:** Walk-forward rolling evaluation, quantile loss computation.
-
----
-
-### ML Automated Test Suites (`apps/ml-service/test_*.py`)
-
-* **`apps/ml-service/test_ac_acceptance.py`**: Acceptance criteria verify karta hai (quantiles order, non-negativity, 35-day limit).
-* **`apps/ml-service/test_ai01_corrections.py`**: AI-01 audit issues (feature parity, boundary checks) verify karta hai.
-* **`apps/ml-service/test_data_access.py`**: Database connectivity, queries aur data hygiene check karta hai.
-* **`apps/ml-service/test_fallback_baseline.py`**: Deterministic 4-week fallback output aur bounds test karta hai.
-* **`apps/ml-service/test_health.py`**: FastAPI health endpoints aur HTTP 200 responses test karta hai.
-* **`apps/ml-service/test_leakage_validation.py`**: Strict temporal validation test karta hai ke future data training mein leak na ho.
-* **`apps/ml-service/test_srs_chapter5_compliance.py`**: Complete SRS Chapter 5 metrics (WAPE $\le 18\%$, Pinball loss, 35-day guardrail) test karta hai.
+### BakeSuite Ki Misaalein:
+* `SKU-BRD-01` = Plain White Bread (Large)
+* `SKU-BRD-02` = Bran Bread (Large)
+* `SKU-CAK-01` = Belgian Chocolate Fudge Cake
+* `SKU-SAV-01` = Chicken Tikka Puff Patties
+* `SKU-SWT-01` = Lahori Naankhatai Box
+* `SKU-BEV-01` = Special Karak Doodh Patti
 
 ---
 
-## 2. Node.js & TypeScript ERP Core (`apps/erp-core/`)
+## 4. Testing Phase Ke Faislay (Testing Decisions & Rules)
 
-### Core Entry & Server (`apps/erp-core/src/`)
+Test suites (`npm run test:erp`, `npm run test:ml`, `npm run test:circuit-breaker`) ke dauran verify kiye gaye ahem rules:
 
-### `apps/erp-core/src/index.ts`
-* **Work / Maqsad:** Node.js Express server ka boot file hai jo port 3000 par listen karta hai aur graceful shutdown handles karta hai.
-* **Used / Tech:** `http.createServer`, `app.listen`, process signals (`SIGTERM`, `SIGINT`).
+### 4.1 Deterministic Fallback Engine (AC-4 Rule)
+* **Khatra:** Agar Python ML server down ho jaye to bakery counter band nahi hona chahiye.
+* **Faisla:** System khud-b-khud pichle 4 hafton ke same day (e.g. pichle 4 Somwar) ki sales ka average nikaal kar foran backup P10, P50, P90 forecast screen par dikha deta hai.
+* **Badge:** Screen par **"Fallback estimate"** ka badge lag jata hai taake manager ko pata rahe ke yeh AI model nahi balke emergency backup hai.
 
-### `apps/erp-core/src/app.ts`
-* **Work / Maqsad:** Express app configuration: CORS, JSON parser, static frontend folder serve karna, aur API routes mount karna.
-* **Used / Tech:** `express`, `cors`, `path.join`, middleware chaining.
+### 4.2 Circuit Breaker (Hifazati Switch)
+* **Kyun zaroori hai?** Bar bar crash hone wale ML server par mazeed traffic bhej kar usay mazeed crush na kiya jaye.
+* **Faisla:**
+  * **CLOSED:** Sab theek hai, normal traffic chal rahi hai.
+  * **OPEN:** Agar 30 seconds ke andar **5 dafa lagataar failure** aaye, to breaker trip ho jata hai aur foran Fallback par switch ho jata hai.
+  * **HALF-OPEN:** 60 seconds baad breaker 3 requests bhej kar check karta hai. Agar teeno theek chalti hain to wapas CLOSED ho jata hai.
 
-### `apps/erp-core/src/config/index.ts`
-* **Work / Maqsad:** ERP core ke environment variables (DB credentials, ML service URL, Circuit breaker settings) load aur export karta hai.
-* **Used / Tech:** `dotenv`, strongly typed TypeScript config interface.
+### 4.3 35-Day Horizon Guardrail
+* **Faisla:** Bakery items (double roti, cake) fresh banate hain, is liye forecast sirf **maximum 35 days** aage tak allow hai.
+* **Test:** Agar koi user 36 ya us se zyada din ka forecast mangta hai, to system foran **HTTP 422 (Unprocessable Content)** error de kar request block kar deta hai.
 
-### `apps/erp-core/src/db/index.ts`
-* **Work / Maqsad:** PostgreSQL 16 database ka connection pool initialize karta hai aur queries execute karta hai.
-* **Used / Tech:** `pg.Pool`, query helper functions, error logging.
+### 4.4 Quantile Demand Predictions (P10, P50, P90)
+* Bakery mein single number prediction nuqsaan deh hoti hai:
+  * **P10 (Minimum / Pessimistic):** Din thanda rahe to kam az kam itna bikega.
+  * **P50 (Median / Expected):** Normal din ki expected sale (Baking schedule is par banta hai).
+  * **P90 (Peak / Optimistic):** Weekend ya tehwaar par rush ho to maximum itna bikega.
 
----
+### 4.5 Manual Overrides aur Audit Trail
+* **Faisla:** Agar qareeb koi shadi ya local event ho to Branch Manager forecast ki quantity barha ya ghata sakta hai.
+* **Rule:** Manager ko **Reason Code** dena laazmi hai. Database mein pura record save hota hai ke kis user ne kis waqt kya change kiya. Chahein to aik click par wapas original AI forecast par revert bhi kar sakte hain.
 
-### Authentication & Fallback Middleware (`apps/erp-core/src/auth/` & `fallbacks/`)
+### 4.6 Branch Authorization Security
+* **Faisla:** Karachi branch ka manager sirf Karachi (`BR-KHI-01`) ka data dekh sakta hai. Lahore (`BR-LHR-01`) ya Islamabad ka data chheerne par foran **HTTP 403 Forbidden** aayega.
 
-### `apps/erp-core/src/auth/authMiddleware.ts`
-* **Work / Maqsad:** User authentication aur multi-tenant branch authorization check karta hai (`x-user-id`, `x-branch-id`, role checks) taake koi user doosri branch ka data na chura sake.
-* **Used / Tech:** Express Request/Response middleware, role validation.
+### 4.7 Rescore Batch Limit (500 Items)
+* **Faisla:** Dashboard se aik waqt mein maximum **500 items** re-calculate karne ki ijazat hai. 501 items bhejte hi request reject ho jati hai taake server hang na ho.
 
-### `apps/erp-core/src/fallbacks/circuitBreaker.ts`
-* **Work / Maqsad:** Martin Fowler Circuit Breaker state machine (CLOSED, OPEN, HALF-OPEN). Agar ML service 30 seconds mein 5 dafa fail ho to circuit OPEN ho jata hai aur traffic fallback par divert ho jati hai.
-* **Used / Tech:** State machine pattern, rolling error counters, recovery timer.
+### 4.8 Pakistani Hijri Calendar & Weather Factors
+* Model mein Pakistani tehwaar factor in hain:
+  * **Ramadan:** Sehri aur Iftar timing, din ki sale low, raat ki high.
+  * **Eid-ul-Fitr & Eid-ul-Adha:** Cakes aur Sheermal ki demand 300% barh jana.
+  * **14 August & Shab-e-Barat:** Mithai aur confectionery ki peak.
+  * **Sunday Morning:** Halwa puri, rusk, aur doodh patti ka breakfast rush.
+  * **Mausam:** Karachi ki shadeed garmi aur Lahore ki sardi ke mutabiq cold/hot beverage demand.
 
-### `apps/erp-core/src/fallbacks/demandFallback.ts`
-* **Work / Maqsad:** AC-4 deterministic 4-week same-weekday median fallback engine. Agar ML service down ho to bina rukaawat ke database se pichlay 4 hafton ka median nikal kar forecast return karta hai.
-* **Used / Tech:** PostgreSQL window functions, median statistics, fallback badge assignment.
+### 4.9 Data Leakage Prevention
+* Model training ke waqt future ka data (aane wale kal ki sales) pichle dinon ke features mein shamil nahi hona chahiye taake model imtihaan mein cheating na kare.
 
----
-
-### ERP Routes & API Endpoints (`apps/erp-core/src/routes/`)
-
-### `apps/erp-core/src/routes/forecasts.ts`
-* **Work / Maqsad:** Demand forecast ke tamam endpoints provide karta hai:
-  * `GET /api/v1/ai/forecasts/demand`: Multi-SKU forecasts with 35-day horizon guardrail.
-  * `GET /api/v1/ai/forecasts/chart-data`: 28-day historical actuals + 14-day forward forecast for Chart.js.
-  * `GET /api/v1/ai/forecasts/batch-info`: Latest batch scoring audit status.
-* **Used / Tech:** `express.Router`, Circuit breaker proxy to ML, PostgreSQL queries, 35-day guardrail check (`HTTP 422`).
-
-### `apps/erp-core/src/routes/overrides.ts`
-* **Work / Maqsad:** Branch managers ke manual forecast overrides ko handle karta hai (Create override with audit trail, revert override).
-* **Used / Tech:** `POST /override`, `POST /revert`, database insert into `ml.forecast_overrides`.
-
-### `apps/erp-core/src/routes/extracts.ts`
-* **Work / Maqsad:** Downstream ERP modules (WMS, POS, Logistics) ke liye tabular forecast data extracts export karta hai.
-* **Used / Tech:** CSV serialization, JSON data dumps.
-
-### `apps/erp-core/src/routes/health.ts`
-* **Work / Maqsad:** ERP service ka apna health check endpoint.
+### 4.10 Champion vs Challenger Retraining
+* Har Itwar raat **03:00 AM** par model retrain hota hai. Naya model (Challenger) purane model (Champion) ki jagah tabhi lega agar uski accuracy (WAPE) **kam az kam 3% behtar** ho.
 
 ---
 
-### Utilities & Verification Tests (`apps/erp-core/src/utils/` & root)
+## 5. Kubernetes aur DevOps Files (`k8s/` Folder)
 
-### `apps/erp-core/src/utils/formatters.ts`
-* **Work / Maqsad:** Pakistani regional conventions implement karta hai: Currency formatting (`Rs 1,250,000.00`) aur date formatting (`DD-MM-YYYY`).
-* **Used / Tech:** `Intl.NumberFormat`, Pakistan locale conventions.
+Kubernetes (**K8s**) cloud production servers par containers ko automatically chalane aur scale karne ke liye use hota hai.
 
-### `apps/erp-core/src/test-verify.ts`
-* **Work / Maqsad:** ERP core ke tamam endpoints, database queries, guardrails, aur formatters ko programmatically verify karta hai.
-* **Used / Tech:** Integration testing script, assertion suite.
-
-### `apps/erp-core/src/test-circuit-breaker.ts`
-* **Work / Maqsad:** Circuit breaker state machine (Closed $\rightarrow$ Open $\rightarrow$ Half-Open) aur AC-4 fallback execution ko simulate aur verify karta hai.
-
-### `apps/erp-core/package.json` & `tsconfig.json`
-* **Work / Maqsad:** ERP core ke Node dependencies (`express`, `pg`, `tsx`, `typescript`) aur TypeScript compiler options (`ES2022`, strict mode) define karta hai.
+| File | Kaam (Work) | Schedule / Timing |
+| :--- | :--- | :--- |
+| **[`deployment-ml.yaml`](file:///d:/BAKESUITE/k8s/deployment-ml.yaml)** | ML Microservice ke **2 live instances (replicas)** chalata hai taake agar aik crash ho to doosra sambhal le. | 24/7 hamesha live |
+| **[`cronjob-nightly-pipeline.yaml`](file:///d:/BAKESUITE/k8s/cronjob-nightly-pipeline.yaml)** | Har raat agle 35 dinon ka forecast calculate karke database mein load karta hai. | Har raat **01:30 AM** |
+| **[`cronjob-retraining.yaml`](file:///d:/BAKESUITE/k8s/cronjob-retraining.yaml)** | AI model ko naye data ke sath retrain karta hai. | Har Itwar **03:00 AM** |
 
 ---
 
-## 3. Frontend Client Dashboard (`apps/erp-core/client/`)
+## 6. `node_modules` Folder Kya Hai?
 
-### `apps/erp-core/client/index.html`
-* **Work / Maqsad:** Pure client application ka structural layout hai: Sidebar, Top Navigation, 4 Modular Views (Workbench, Branch Indent, Central Kitchen, Purchase Requirements), Chart container, Modals aur Toasts.
-* **Used / Tech:** Semantic HTML5, FontAwesome icons, Inter & Outfit fonts.
-
-### `apps/erp-core/client/app.js`
-* **Work / Maqsad:** Dashboard ka complete client-side brain:
-  * API calls with authentication headers.
-  * Chart.js initialization & dynamic updates (28 actuals vs 14 forecast).
-  * Category filtering & search without bugs.
-  * Steppers for indent quantities & CSV export.
-  * Override modal & SHAP explainability rendering.
-* **Used / Tech:** Vanilla JavaScript (ES6+), `Chart.js`, `fetch API`, DOM manipulation.
-
-### `apps/erp-core/client/style.css`
-* **Work / Maqsad:** Dark-mode luxury bakery ERP theme ka master design system: CSS variables, glassmorphic cards, responsive data tables, glow badges, custom scrollbars.
-* **Used / Tech:** Pure Vanilla CSS, CSS Grid, Flexbox, Keyframe animations.
+* **Matlab:** Tamam external JavaScript/TypeScript packages ka store room.
+* **Kyun zaroori hai?** Jab hum `npm install` chalate hain to Express, CORS, PostgreSQL client (`pg`), TypeScript compiler, aur Zod jese packages is folder mein download hote hain.
+* **Rules:**
+  * Iska size bara hota hai (200MB–500MB+).
+  * Isay `.gitignore` mein rakha jata hai taake Git/GitHub par upload na ho.
+  * Agar delete ho jaye to terminal mein `npm install` chalane se wapas aa jata hai.
 
 ---
 
-## 4. Database Setup & Preprocessing Scripts (`scripts/`)
+## 7. `scripts/` Folder Ki Files Ka Kaam
 
-### `scripts/init-db.sql`
-* **Work / Maqsad:** PostgreSQL master DDL schema file: `public` schema (branches, products, price lists, pos invoices, stock) aur `ml` schema (calendar dimension, weather, daily demand, predictions, overrides) create karta hai.
-* **Used / Tech:** PostgreSQL 16 DDL, Indexes, Foreign keys, UUIDs.
+Setup, data preparation, aur verification ke Python tools:
 
-### `scripts/init-db.py`
-* **Work / Maqsad:** `init-db.sql` ko Python ke zariye execute karke database schema apply karta hai.
-* **Used / Tech:** `psycopg2`, SQL file execution.
-
-### `scripts/calendar_generator.py`
-* **Work / Maqsad:** 5-year Pakistani Hijri Lunar calendar generate karta hai: Gregorian dates ko Islamic dates (Hijri year, month, day), Ramadan fasting flags, aur Eid/Ashura gazetted holidays ke sath map karta hai.
-* **Used / Tech:** Hijri conversion algorithms, Pakistani official holidays schedule.
-
-### `scripts/seed_database.py`
-* **Work / Maqsad:** Master data generator aur transaction enricher. 3 branches, 32 products, raw transactions, aur historical actual sales (`2016-2017` aur `March-September 2026`) generate karke 40,000+ demand records seed karta hai.
-* **Used / Tech:** `psycopg2.extras.execute_values`, bulk insert optimization, statistical seasonality modeling.
-
-### `scripts/validate_data_coverage.py`
-* **Work / Maqsad:** Data audit script jo verify karta hai ke database mein tamam 3 branches, 32 SKUs, aur dates ka mukammal coverage maujood hai (zero missing gaps).
-
-### `scripts/evaluate_ai01_metrics.py`
-* **Work / Maqsad:** Machine learning models ke تمام SRS Chapter 5 metrics evaluate karta hai: WAPE (Weighted Absolute Percentage Error), P10/P50/P90 Pinball Loss, aur 80% Prediction Interval Coverage.
-* **Used / Tech:** Statistical metric evaluation, LightGBM validation.
-
-### `scripts/benchmark_batch_scale.py`
-* **Work / Maqsad:** High-scale performance benchmark script jo 32 SKUs $\times$ 35 days (1,120 predictions) ki batch scoring latency measure karta hai ($<5$ seconds benchmark).
+1. **[`seed_database.py`](file:///d:/BAKESUITE/scripts/seed_database.py):** Database mein 3 branches, 32 products, 125,000+ invoices aur calendar data load karta hai.
+2. **[`validate_data_coverage.py`](file:///d:/BAKESUITE/scripts/validate_data_coverage.py):** Audit karta hai ke database mein AI model ke liye zaroori data poora hai ya nahi.
+3. **[`calendar_generator.py`](file:///d:/BAKESUITE/scripts/calendar_generator.py):** 5 saal ka Pakistani Hijri + Gregorian calendar dimensions generate karta hai.
+4. **[`evaluate_ai01_metrics.py`](file:///d:/BAKESUITE/scripts/evaluate_ai01_metrics.py):** Model ke tamam Chapter 5 metrics (WAPE, MPE, Coverage 80%, Pinball loss) evaluate karta hai.
+5. **[`benchmark_batch_scale.py`](file:///d:/BAKESUITE/scripts/benchmark_batch_scale.py):** 3,360 forecasts ki batch generation speed aur latency test karta hai (<2 hours window).
+6. **[`run_nightly_pipeline.py`](file:///d:/BAKESUITE/scripts/run_nightly_pipeline.py):** Raat wali automated pipeline ko testing ke liye manually run karta hai.
+7. **[`init-db.sql`](file:///d:/BAKESUITE/scripts/init-db.sql) / [`init-db.py`](file:///d:/BAKESUITE/scripts/init-db.py):** PostgreSQL tables aur schemas (`public` aur `ml`) create karta hai.
 
 ---
 
-## 5. Kubernetes & Docker Infrastructure (`k8s/` & Root)
+## 8. `apps/erp-core` Folder
 
-### `k8s/deployment-ml.yaml`
-* **Work / Maqsad:** Kubernetes production deployment manifest for ML service (replicas, CPU/memory limits, readiness/liveness probes, environment secrets).
-* **Used / Tech:** Kubernetes v1 Pod/Deployment specification.
+Yeh BakeSuite ka **Main Engine** hai jo **Port 3000** par chalta hai:
 
-### `k8s/cronjob-retraining.yaml`
-* **Work / Maqsad:** Kubernetes CronJob jo har hafte automatic model drift evaluation aur retraining pipeline chalata hai.
-* **Used / Tech:** Kubernetes CronJob, Scheduled trigger.
-
-### `docker-compose.yml`
-* **Work / Maqsad:** Local multi-container development environment: PostgreSQL 16, Redis 7, ML Service (FastAPI), aur ERP Core (Node.js) ko single command se run karta hai.
-* **Used / Tech:** Docker Compose v3.8, health-checks, volumes, port mapping.
-
-### `package.json` (Root)
-* **Work / Maqsad:** Root workspace orchestrator jo concurrent services run karne ke scripts provide karta hai:
-  * `npm run dev:erp`: Express ERP server start karta hai.
-  * `npm run dev:ml`: FastAPI ML service start karta hai.
-  * `npm run test:erp`: ERP verification suite run karta hai.
-  * `npm run test:ml`: Python pytest suite run karta hai.
+* **Frontend UI (`apps/erp-core/client/`):**
+  * `index.html`: Forecast Workbench dashboard ka structure.
+  * `style.css`: Design, themes, aur responsive styling.
+  * `app.js`: Interactive data table, Chart.js line charts, branch filters, aur override modal.
+* **Backend API (`apps/erp-core/src/`):**
+  * `index.ts` / `app.ts`: Express web server jo static files aur REST APIs serve karta hai.
+  * `routes/`: Forecasts, manual overrides, extracts, aur health check endpoints.
+  * `fallbacks/`: Deterministic 4-week moving average fallback aur Circuit Breaker state machine.
+  * `db/`: PostgreSQL connection pool aur queries.
+  * `auth/`: JWT security aur branch-level authorization.
 
 ---
 
-## 6. Project Knowledge & Documentation
+## 9. `apps/ml-service` Folder
 
-### `DEVELOPER.md`
-* **Work / Maqsad:** Developer handoff guide: Local installation steps, API specifications, ML formulas, circuit breaker architecture, aur troubleshooting guidelines.
+Yeh Python 3.12 aur FastAPI par mushtamil **AI / Machine Learning Microservice** hai jo **Port 8000** par chalta hai:
 
-### `brain.md`
-* **Work / Maqsad:** Frontend screens aur business process master guide in Roman Urdu (Forecast Workbench, Branch Indent Plan, Central Kitchen Bake Plan, Purchase Requirements, Visual KPIs, Chart.js dynamics).
+* **`main.py`:** FastAPI application entrypoint.
+* **`app/features/`:** Feature extraction (Lags, rolling averages, lunar calendar, temperature).
+* **`app/models/`:** AI Models (LightGBM Quantile Regressors for P10/P50/P90 + SARIMAX).
+* **`app/serving/`:** Online real-time serving aur nightly batch scoring.
+* **`app/training/`:** Weekly automated model retraining pipeline.
+* **`test_*.py`:** 37 automated Pytest unit aur integration tests.
 
-### `explaincode.md` (Yeh File)
-* **Work / Maqsad:** Pure project ki har aik file ka short, to-the-point summary aur technology stack reference.
+---
+
+## 10. `data/` Folder aur Sales Dataset Ka Istemal
+
+File location: **[`data/raw/bakery_transactions.csv`](file:///d:/BAKESUITE/data/raw/bakery_transactions.csv)**
+
+### Isme Kya Hai?
+Is CSV mein bakery counter ki asli receipts ka data hai (`TransactionNo`, `Items`, `DateTime`, `Daypart`, `DayType`, `Quantity`).
+
+### Yeh Project Mein Kahan Use Hota Hai?
+1. **`scripts/seed_database.py`:** Is data ko parh kar Pakistani branches (Karachi, Lahore, Islamabad), PKR currency, aur Ramadan/Eid ke dates ke sath enrich karke PostgreSQL database mein **125,334 invoices** bana kar daalta hai.
+2. **AI Model Training:** AI model isi historical data se Somwar, Itwar, aur festive patterns seekhta hai.
+3. **UI Dashboard Chart:** Browser screen par pichle 28 dinon ki **actual sales ki line** isi data se draw hoti hai.
+4. **Fallback Engine:** ML server down hone par pichle 4 hafton ka average isi data se calculate hota hai.
+
+---
+
+## 11. Tamam Items aur Categories Ki Master List
+
+Master file: **[`scripts/seed_database.py`](file:///d:/BAKESUITE/scripts/seed_database.py#L23-L65)**  
+BakeSuite mein total **32 Products** hain jo **6 Categories** mein taqseem hain:
+
+### 1. Breads & Traditional Loaves (`BREAD` — 7 Items)
+* `SKU-BRD-01`: Plain White Bread | 48 hrs shelf life | Rs 180.00
+* `SKU-BRD-02`: Bran Bread | 48 hrs shelf life | Rs 220.00
+* `SKU-BRD-03`: Farmhouse Sourdough | 36 hrs shelf life | Rs 260.00
+* `SKU-BRD-04`: French Baguette | 24 hrs shelf life | Rs 240.00
+* `SKU-BRD-05`: Traditional Sheermal | 72 hrs shelf life | Rs 160.00
+* `SKU-BRD-06`: Royal Taftan | 48 hrs shelf life | Rs 150.00
+* `SKU-BRD-07`: Garlic Herb Focaccia | 24 hrs shelf life | Rs 320.00
+
+### 2. Cakes (`CAKE` — 2 Items)
+* `SKU-CAK-01`: Belgian Chocolate Fudge Cake | 72 hrs shelf life | Rs 1,850.00
+* `SKU-CAK-02`: Red Velvet Cream Cheese Cake | 48 hrs shelf life | Rs 1,950.00
+
+### 3. Pastries & Baked Treats (`PASTRY` — 6 Items)
+* `SKU-CAK-03`: Classic Black Forest Pastry | 24 hrs shelf life | Rs 250.00
+* `SKU-CAK-04`: Walnut Fudge Brownie | 72 hrs shelf life | Rs 320.00
+* `SKU-CAK-05`: Blueberry Streusel Muffin | 48 hrs shelf life | Rs 220.00
+* `SKU-CAK-06`: English Butter Scone | 36 hrs shelf life | Rs 200.00
+* `SKU-CAK-07`: Custard Fruit Tartine | 24 hrs shelf life | Rs 280.00
+* `SKU-CAK-08`: Medialuna Croissant | 24 hrs shelf life | Rs 240.00
+
+### 4. Savories & Hot Kitchen (`SAVORY` — 6 Items)
+* `SKU-SAV-01`: Chicken Tikka Puff Patties | 12 hrs shelf life | Rs 160.00
+* `SKU-SAV-02`: Club Sandwich Platter | 8 hrs shelf life | Rs 480.00
+* `SKU-SAV-03`: Spanish Omelette Brunch | 6 hrs shelf life | Rs 650.00
+* `SKU-SAV-04`: Spinach & Feta Frittata | 8 hrs shelf life | Rs 520.00
+* `SKU-SAV-05`: Cream of Mushroom Soup | 8 hrs shelf life | Rs 380.00
+* `SKU-SAV-06`: Spiced Chicken Stew | 8 hrs shelf life | Rs 580.00
+
+### 5. Traditional Confectionery & Biscuits (`SWEET` — 6 Items)
+* `SKU-SWT-01`: Lahori Naankhatai Box | 30 days shelf life | Rs 480.00
+* `SKU-SWT-02`: Almond Rusk Pack | 30 days shelf life | Rs 280.00
+* `SKU-SWT-03`: Gulab Jamun Assortment (1kg) | 4 days shelf life | Rs 1,250.00
+* `SKU-SWT-04`: Dulce de Leche Alfajores | 10 days shelf life | Rs 220.00
+* `SKU-SWT-05`: Belgian Chocolate Truffles Box | 15 days shelf life | Rs 650.00
+* `SKU-SWT-06`: Jammie Butter Biscuits | 30 days shelf life | Rs 180.00
+
+### 6. Hot & Cold Beverages (`BEVERAGE` — 5 Items)
+* `SKU-BEV-01`: Special Karak Doodh Patti | 4 hrs shelf life | Rs 180.00
+* `SKU-BEV-02`: Espresso Roast Coffee | 4 hrs shelf life | Rs 380.00
+* `SKU-BEV-03`: Dark Belgian Hot Chocolate | 4 hrs shelf life | Rs 420.00
+* `SKU-BEV-04`: Fresh Seasonal Citrus Juice | 6 hrs shelf life | Rs 280.00
+* `SKU-BEV-05`: Greek Yogurt Berry Smoothie | 6 hrs shelf life | Rs 450.00
+
+---
+
+## 12. Is Project Mein Docker Kyun Use Hua?
+
+1. **Polyglot Stack:** Project do alag technologies use karta hai (Node.js 20 + Python 3.12 + C++ LightGBM libraries). Docker dono ko alag isolated containers mein pack karta hai taake computer par koi library conflict na ho.
+2. **Same Environment Everywhere:** Windows laptop par chalne wala code jab Linux cloud server par jaye to crash na ho.
+3. **Kubernetes (K8s) Requirement:** Kubernetes containers chalane ke liye Docker images (`bakesuite-ml-service:1.0.0` aur `bakesuite-erp-core:1.0.0`) use karta hai.

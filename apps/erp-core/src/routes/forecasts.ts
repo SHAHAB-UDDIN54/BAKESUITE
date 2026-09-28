@@ -11,7 +11,7 @@ export const forecastsRouter = Router();
  * GET /api/v1/ai/metadata/branches
  * Returns active branches from database (Requirement 27)
  */
-forecastsRouter.get('/metadata/branches', async (req: Request, res: Response) => {
+forecastsRouter.get('/metadata/branches', authenticateUser, async (req: Request, res: Response) => {
   try {
     const { rows } = await pool.query(
       'SELECT branch_id, branch_name, city, area_type FROM public.branches ORDER BY branch_id;'
@@ -26,7 +26,7 @@ forecastsRouter.get('/metadata/branches', async (req: Request, res: Response) =>
  * GET /api/v1/ai/metadata/categories
  * Returns active categories from database (Requirement 27)
  */
-forecastsRouter.get('/metadata/categories', async (req: Request, res: Response) => {
+forecastsRouter.get('/metadata/categories', authenticateUser, async (req: Request, res: Response) => {
   try {
     const { rows } = await pool.query(
       "SELECT DISTINCT category_id FROM public.products WHERE status = 'ACTIVE' ORDER BY category_id;"
@@ -44,16 +44,16 @@ forecastsRouter.get('/metadata/categories', async (req: Request, res: Response) 
  * GET /api/v1/ai/forecasts/circuit-breaker
  * Exposes current circuit breaker metrics and fallback rate for live telemetry and testing.
  */
-forecastsRouter.get('/forecasts/circuit-breaker', (req: Request, res: Response) => {
+forecastsRouter.get('/forecasts/circuit-breaker', authenticateUser, (req: Request, res: Response) => {
   return res.json(circuitBreaker.getMetrics());
 });
 
 /**
  * GET /api/v1/ai/forecasts/batch-info
  * Returns metadata regarding the most recent nightly batch scoring run.
- * Requirement 24: Returns explicit 'Unavailable' state if not recorded, no fake dates.
+ * Requirement 24 & Fix #12: Returns explicit 'Unavailable' state if not recorded, never uses fake operational statistics.
  */
-forecastsRouter.get('/forecasts/batch-info', async (req: Request, res: Response) => {
+forecastsRouter.get('/forecasts/batch-info', authenticateUser, async (req: Request, res: Response) => {
   try {
     const query = `
       SELECT 
@@ -84,7 +84,7 @@ forecastsRouter.get('/forecasts/batch-info', async (req: Request, res: Response)
       last_run_at: row.last_run_at,
       run_id: row.run_id,
       forecast_horizon: parseInt(row.horizon_days, 10) || 35,
-      skus_scored: parseInt(row.skus_scored, 10) || 32
+      skus_scored: (row.skus_scored !== undefined && row.skus_scored !== null) ? parseInt(row.skus_scored, 10) : 0
     });
   } catch (error) {
     console.error('[ERP-PROXY] Error fetching batch info:', error);
@@ -150,17 +150,18 @@ forecastsRouter.get('/forecasts/chart-data', authenticateUser, async (req: Reque
         event_context: r.event_context
       }));
     } else {
-      // Fallback 14-day projection
-      const baseFallback = await calculateDeterministicFallback(branchId, skuId, new Date().toISOString().split('T')[0]);
+      // Fix #11: Fallback 14-day projection - calculate each forward date independently with date-specific calendar & weekday uplifts
       for (let i = 1; i <= 14; i++) {
         const d = new Date();
         d.setDate(d.getDate() + i);
+        const targetDateStr = d.toISOString().split('T')[0];
+        const dayFallback = await calculateDeterministicFallback(branchId, skuId, targetDateStr);
         forecast.push({
-          date: d.toISOString().split('T')[0],
-          p10: baseFallback.p10_quantity,
-          p50: baseFallback.p50_quantity,
-          p90: baseFallback.p90_quantity,
-          event_context: 'Normal'
+          date: targetDateStr,
+          p10: dayFallback.p10_quantity,
+          p50: dayFallback.p50_quantity,
+          p90: dayFallback.p90_quantity,
+          event_context: dayFallback.event_context || 'Normal'
         });
       }
     }
@@ -180,9 +181,9 @@ forecastsRouter.get('/forecasts/chart-data', authenticateUser, async (req: Reque
 /**
  * POST /api/v1/ai/forecasts/rescore
  * Proxies fast on-demand scenario rescoring to ML microservice.
- * Strictly enforces maximum 500 SKU x Branch pairs.
+ * Strictly enforces maximum 500 SKU x Branch pairs and authenticated branch permissions (Critical Fix #8).
  */
-forecastsRouter.post('/forecasts/rescore', async (req: Request, res: Response) => {
+forecastsRouter.post('/forecasts/rescore', authenticateUser, async (req: Request, res: Response) => {
   const items = req.body.items;
 
   if (!items || !Array.isArray(items)) {
@@ -195,6 +196,16 @@ forecastsRouter.post('/forecasts/rescore', async (req: Request, res: Response) =
       requested_count: items.length,
       max_allowed: 500
     });
+  }
+
+  // Server-side Branch Access Verification (Critical Fix #8)
+  for (const item of items) {
+    if (item.branch_id && !verifyBranchAccess(req.user, item.branch_id)) {
+      return res.status(403).json({
+        error: `Forbidden: User is not authorized to rescore forecasts for branch ${item.branch_id}`,
+        authorized_branches: req.user?.authorizedBranches || []
+      });
+    }
   }
 
   const startTime = Date.now();

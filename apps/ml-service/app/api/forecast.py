@@ -16,6 +16,7 @@ from app.core.db import engine
 from app.models.lgbm_quantiles import LightGBMQuantileModel
 from app.models.confidence import compute_confidence_score
 from app.models.cold_start import cold_start_model
+from app.services.prediction_service import prediction_service
 
 router = APIRouter(prefix="/ml/v1/forecast", tags=["Demand Forecasting"])
 
@@ -584,13 +585,16 @@ def rescore_scenario_demand(request: ScenarioRescoreRequest):
         item_metadata.append({
             "sku_id": item.sku_id,
             "branch_id": item.branch_id,
-            "date": item.date,
+            "category_id": prod_info["category_id"],
+            "forecast_date": item.date,
+            "base_price": base_price,
             "scenario_price": scenario_price,
             "promo_depth": promo_depth,
             "baseline_p50": base_meta.get("p50", int(round(lag_1))),
             "event_context": event_name,
             "non_censored_days": non_censored_count,
-            "max_observed": max_demand_map.get((item.sku_id, item.branch_id), 0)
+            "max_observed": max_demand_map.get((item.sku_id, item.branch_id), 0),
+            "is_cold_start": False
         })
 
     if not feature_rows:
@@ -603,59 +607,31 @@ def rescore_scenario_demand(request: ScenarioRescoreRequest):
             "results": []
         }
 
-    # Run real model inference
+    # Execute identical production prediction pipeline: LightGBM + SARIMAX + NNLS Ensemble
     df_features = pd.DataFrame(feature_rows)
-    p10_arr, p50_arr, p90_arr = lgbm_model.predict_quantiles(df_features)
+    pipeline_preds = prediction_service.predict_batch(df_features, item_metadata, weather_available=True)
 
     results = []
-    for idx, meta in enumerate(item_metadata):
-        # Promotion discount lifts volume based on model-predicted price ratio;
-        # if promo_depth specified without manual scenario price change, apply standard promo factor
-        promo_depth = meta["promo_depth"]
-        promo_multiplier = 1.0 + (promo_depth * 0.015) if promo_depth > 0 else 1.0
-
-        raw_p10 = int(round(p10_arr[idx] * promo_multiplier))
-        raw_p50 = int(round(p50_arr[idx] * promo_multiplier))
-        raw_p90 = int(round(p90_arr[idx] * promo_multiplier))
-
-        # Trailing 56d clipping rule
-        max_obs = meta["max_observed"]
-        forecast_ceiling = int(max_obs * 3.0) if max_obs > 0 else None
-        if forecast_ceiling is not None and raw_p50 > forecast_ceiling:
-            final_p50 = forecast_ceiling
-        else:
-            final_p50 = raw_p50
-
-        # Monotonic quantile ordering
-        final_p10 = max(1, min(raw_p10, final_p50))
-        final_p90 = max(final_p50, raw_p90)
-        if forecast_ceiling is not None and final_p90 > int(forecast_ceiling * 1.5):
-            final_p90 = int(forecast_ceiling * 1.5)
-
-        # SRS Confidence computation
-        conf_res = compute_confidence_score(
-            p10=final_p10,
-            p50=final_p50,
-            p90=final_p90,
-            non_censored_days_180=meta["non_censored_days"],
-            is_cold_start=False,
-            weather_available=True
-        )
-
+    for idx, pred in enumerate(pipeline_preds):
+        meta = item_metadata[idx]
         results.append({
-            "sku_id": meta["sku_id"],
-            "branch_id": meta["branch_id"],
-            "forecast_date": meta["date"],
+            "sku_id": pred["sku_id"],
+            "branch_id": pred["branch_id"],
+            "forecast_date": pred["forecast_date"],
             "baseline_p50": meta["baseline_p50"],
-            "scenario_p50": final_p50,
-            "scenario_p10": final_p10,
-            "scenario_p90": final_p90,
-            "confidence_score": conf_res["confidence_score"],
-            "confidence_band": conf_res["confidence_band"],
-            "event_context": meta["event_context"],
+            "scenario_p50": pred["p50_quantity"],
+            "scenario_p10": pred["p10_quantity"],
+            "scenario_p90": pred["p90_quantity"],
+            "confidence_score": pred["confidence_score"],
+            "confidence_band": pred["confidence_band"],
+            "event_context": pred["event_context"],
             "promotion_depth_percent": meta["promo_depth"],
-            "expected_revenue_pkr": round(final_p50 * meta["scenario_price"], 2),
-            "delta_units": final_p50 - meta["baseline_p50"]
+            "expected_revenue_pkr": pred["expected_revenue_pkr"],
+            "delta_units": pred["p50_quantity"] - meta["baseline_p50"],
+            "lgb_p50": pred["lgb_p50"],
+            "sarimax_p50": pred["sarimax_p50"],
+            "ensemble_weights": pred["ensemble_weights"],
+            "served_from": pred["served_from"]
         })
 
     elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)

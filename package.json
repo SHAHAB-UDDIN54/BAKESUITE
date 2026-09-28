@@ -4,6 +4,7 @@
   "private": true,
   "description": "BakeSuite ERP - Enterprise Bakery Management System for Pakistan",
   "scripts": {
+    "dev": "concurrently -n ERP,ML -c cyan,magenta \"npm run dev:erp\" \"npm run dev:ml\"",
     "dev:erp": "npm --prefix apps/erp-core run dev",
     "dev:ml": "py -3.12 -m uvicorn main:app --app-dir apps/ml-service --host 0.0.0.0 --port 8000 --reload",
     "build:erp": "npm --prefix apps/erp-core run build",
@@ -19,5 +20,8 @@
     "npm": ">=10.0.0"
   },
   "author": "BakeSuite Team",
-  "license": "UNLICENSED"
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "concurrently": "^9.2.4"
+  }
 }

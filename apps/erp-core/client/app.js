@@ -1324,11 +1324,12 @@ window.advanceBakeStage = function(batchId) {
 };
 
 window.scheduleEmergencyBatch = function() {
-  const emergId = `EMERG-0${bakeBatches.filter(b => b.is_emergency).length + 1}`;
+  const count = bakeBatches.filter(b => b.is_emergency).length + 1;
+  const emergId = `ADV-EMERG-0${count}`;
   const emergBatch = {
     batch_id: emergId,
     sku_id: 'SKU-BRD-VIP',
-    sku_name: 'Fresh Brioche Buns (VIP Emergency Order)',
+    sku_name: 'Fresh Brioche Buns (Advisory Planning Batch)',
     category_id: 'BREAD',
     consolidated_demand: 100,
     batch_size: 50,
@@ -1340,7 +1341,7 @@ window.scheduleEmergencyBatch = function() {
   };
   bakeBatches.unshift(emergBatch);
   filterAndRenderBakeBatches();
-  showToast(`Scheduled emergency batch ${emergId} on Rotary Rack 1 for priority dispatch.`, 'warning');
+  showToast(`Scheduled advisory emergency planning batch ${emergId} (Physical kitchen integration pending).`, 'warning');
 };
 
 function exportBakePlanCSV() {
@@ -1586,7 +1587,9 @@ window.generateSinglePO = function(matId) {
   if (!m) return;
   m.po_drafted = true;
   filterAndRenderPurchase();
-  showToast(`Draft Purchase Order PO-${Math.floor(1000 + Math.random() * 9000)} created for ${m.material_name}.`, 'success');
+  const reqDate = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const reqId = `ADV-PO-${reqDate}-${m.material_id.replace('MAT-', '')}`;
+  showToast(`Draft Advisory Purchase Requisition ${reqId} created for ${m.material_name} (Advisory Planning Requisition).`, 'success');
 };
 
 function exportPurchaseCSV() {
@@ -1728,9 +1731,9 @@ function setupEventListeners() {
     });
     filterAndRenderPurchase();
     if (draftedCount > 0) {
-      showToast(`Generated purchase orders for all ${draftedCount} shortfall ingredients.`, 'success');
+      showToast(`Drafted advisory purchase requisitions for ${draftedCount} shortfall ingredients (Planning Mode).`, 'success');
     } else {
-      showToast('All necessary purchase orders have already been released.', 'info');
+      showToast('All necessary purchase requisitions have already been drafted.', 'info');
     }
   });
   document.getElementById('btn-export-purchase')?.addEventListener('click', exportPurchaseCSV);

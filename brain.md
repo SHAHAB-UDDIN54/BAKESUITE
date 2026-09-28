@@ -2,7 +2,26 @@
 
 Yeh document BakeSuite AI-01 Demand Forecasting ke frontend dashboard ke har aik feature, uske visual elements, aur peeche chalne wale backend/machine learning process ko Roman Urdu mein tafseel se bayan karta hai taake samajhna nihayat aasan ho.
 
----
+------------------------------
+Screen Ka Naam	Simple Matlab (Kya Kaam Karti Hai?)
+1. Forecast Workbench (AI-01)	"Kitna bikne ki umeed hai?"
+Yeh screen batati hai ke har item (Bread, Cake, Bun) kitni tadaad mein bikega aur kitne rupay ki sale hogi.
+2. Branch Indent Plan	"Dukan ko kitna maal bhejna hai?"
+AI P50 forecast mein thoda safety buffer mila kar dukan ke liye order tayyar karta hai taake shelf khali na ho.
+3. Central Kitchen Bake	"Kitchen mein kitne batch bake karne hain?"
+Agar 100 bread chahiye aur aik tray/oven mein 50 aati hain, to yeh batata hai ke 2 Batches Deck Oven ya Rotary Rack mein lagane hain.
+4. Purchase Requirements	"Bake karne ke liye kitna Maida, Cheeni, aur Ghee khareedna hai?"
+Demand ko dekh kar hisab nikalta hai ke kitne KG Maida aur kitne darjan Anday factory mein mojood hone chahiye.
+4. Pehle Screen par "000000" Kyun Aa Raha Tha?
+Asal Wajah: System ne aage ke 35 dinon ka andaza lagaya tha jo kal (2026-09-26) se shuru ho raha tha. Lekin jab aapne screen kholi, screen ne poocha: "Mujhe aaj (2026-09-25) ka data dikhao." Database mein aaj ki date ka number na hone ki wajah se screen par 0 Units aur Rs 0.00 aa raha tha.
+Humne Kaise Sahi Kiya: Humne system ko bola ke aaj ke din (2026-09-25) ko pehla din maan kar calculate kare. Ab database mein aaj ka data foran aa gaya aur screen par 396 Units aur Rs 161,620.00 sahi nazar aane laga.
+5. Khulaasa (Summary)
+Koi bhi fake ya farzi number nahi hai.
+Poora system real mathematical models aur purane records par chal raha hai.
+Agar AI server band bhi ho jaye, to dukan rukegi nahi; purane Jummay ka record dekh kar fallback chalu ho jata hai.
+
+
+-----------------------------------
 
 ## 1. Left Sidebar (Navigation & Diagnostics)
 
@@ -416,9 +435,47 @@ Is phase mein BakeSuite codebase ka mukammal audit kiya gaya aur tamam adhoori, 
   2. **SARIMAX Participation:** SARIMAX baseline model exogenous variables ke sath predict karta hai aur NNLS weighted ensemble mein active weight ke sath hissa leta hai.
   3. **Active Products Only:** Batch scoring aur catalog queries sirf `status = 'ACTIVE'` products ko forecast karti hain.
 
-### 14.5 Mukammal Test Results
-* **ERP Core (`npm run test:erp`):** 100% Passed (Regional Formatters, PostgreSQL connection, AC-4 deterministic fallback, 32 active SKUs, 35d vs 36d guardrail, Manual Override & Revert audit trail, Server-side branch authorization, Circuit Breaker state machine).
-* **ML Service (`npm run test:ml`):** **35 / 35 Tests Passed** in 25.81s (Zero failures).
+### 14.5 Final Production Pipeline & Security Fixes
+* **SARIMAX Training & Disk Persistence (Critical Fix #1):**
+  - 18 branch-category combinations (3 branches $\times$ 6 categories) train kar ke `apps/ml-service/models/sarimax_models.joblib` aur `sarimax_metadata.json` mein save kiye gaye. Production inference real persisted models load karti hai.
+* **Trained NNLS Ensemble Weights (Critical Fix #2):**
+  - Validation actuals par constrained NNLS weights ($w_1+w_2=1.0, w_i \ge 0$) learn kiye gaye aur `apps/ml-service/models/ensemble_weights.json` mein persist kiye gaye.
+* **Nightly Production Pipeline in Asia/Karachi (Critical Fix #3):**
+  - `apps/ml-service/app/serving/nightly_pipeline.py`, runner `scripts/run_nightly_pipeline.py`, aur Kubernetes CronJob `k8s/cronjob-nightly-pipeline.yaml` schedule kiye gaye (`30 1 * * *` Asia/Karachi: 01:30 ETL $\rightarrow$ 02:10 Redis refresh $\rightarrow$ 02:15 35-day batch scoring).
+* **Unified Prediction Service (Critical Fix #4 & Fix #5):**
+  - `apps/ml-service/app/services/prediction_service.py` create kiya gaya taake batch scoring aur rescore API bilkul same pipeline use karein (Features $\rightarrow$ LightGBM $\rightarrow$ SARIMAX $\rightarrow$ NNLS Ensemble $\rightarrow$ 56d Clipping $\rightarrow$ Confidence).
+  - Promotional discount multiplier ko `config.PROMOTION_BUSINESS_RULE_ELASTICITY = 0.015` ke taur par document kiya gaya.
+* **True 1,000-Sample Feature Parity Test (Critical Fix #6):**
+  - `apps/ml-service/app/services/feature_parity.py` mein offline query aur online accumulator ko independently compare kiya gaya baghair Redis mein self-copying ke. 1,000 samples par 0 mismatches (0.0000% rate $\le 0.5\%$) hasil hua.
+* **Cryptographic JWT Authentication & Security (Critical Fix #7 & #8):**
+  - `apps/erp-core/src/auth/jwt.ts` create kiya gaya (HMAC-SHA256 signature, expiry, user ID, role, authorized branches).
+  - `/metadata/branches`, `/metadata/categories`, `/forecasts/circuit-breaker`, `/forecasts/batch-info`, aur `/forecasts/rescore` protect kiye gaye. Unauthorized branch rescore HTTP 403 reject karta hai.
+* **Cold-Start Safe Clipping & Point-in-Time Correctness (Fix #9 & Fix #10):**
+  - Zero history par `min(None, value)` crash khatam kiya gaya.
+  - Queries mein strictly `business_date < :as_at_date` enforce kiya gaya taake incomplete current-day data leak na ho.
+* **14-Day Date-Specific Chart Fallback & Batch Info (Fix #11 & Fix #12):**
+  - Chart fallback har aane wale din ka alag alag calendar aur day-of-week uplift calculate karta hai.
+  - Batch info se fake `|| 32` fallback remove kar diya gaya.
+* **Advisory Planning Labels & Clean Requisition IDs (Sections 14-17):**
+  - Branch Indent, Central Kitchen Bake, aur Purchase Requirements ko clearly **Advisory Planning** label kiya gaya.
+  - Purchase order creation se `Math.random()` remove kar ke deterministic structured requisition IDs (`ADV-PO-YYYYMMDD-XXXX`) lagaye gaye.
+* **35-Day Horizon Current Trading Day Alignment (Zero Display Fix):**
+  - `batch_scoring.py` mein loop ko `range(1, 36)` se `range(0, 35)` par badla gaya taake aaj ka din (`as_at_date`) Day 1 ke taur par 35-day retail plan mein score ho.
+  - Pehle frontend par Forecast Workbench baghair date parameter ke call hone par `today` par default hota tha aur prediction table mein 0 rows milti thin jis se `0 Units` aur `Rs 0.00` nazar aata tha.
+  - Ab `2026-09-25` se `2026-10-29` tak ke 3,360 records live table mein mojood hain aur UI par foran **396 Units** aur **Rs 161,620.00** populate ho rahe hain.
+
+### 14.6 Mukammal Test Results
+* **ERP Core (`npm --prefix apps/erp-core run test`):**
+  - 100% Tests Passed (Regional Formatters, PostgreSQL connection, AC-4 deterministic fallback, 32 active SKUs, 35d horizon guardrail, 28 actuals + 14 forecast chart data, Manual Override & Revert audit trail, Server-side branch authorization, Cryptographic JWT signature verification, Sensitive endpoint protection, Rescore cross-branch protection HTTP 403, Circuit Breaker state machine).
+* **ML Service (`py -3.12 -m pytest apps/ml-service`):**
+  - **37 / 37 Tests Passed** in 51.48s (Zero failures).
+* **Feature Parity Test (`py -3.12 apps/ml-service/app/services/feature_parity.py`):**
+  - 1,000 samples checked, 0 mismatches (0.0000% $\le 0.5\%$) $\rightarrow$ **PASS**.
+* **Nightly Pipeline Execution (`py -3.12 scripts/run_nightly_pipeline.py`):**
+  - Step 1 (01:30 PKT ETL): **SUCCESS**
+  - Step 2 (02:10 PKT Redis Feature Refresh): **SUCCESS** (96 entity keys refreshed)
+  - Step 3 (02:15 PKT 35-Day Batch Scoring): **SUCCESS** (3,360 records scored and inserted into `ml.pred_demand_daily`)
+  - Total Duration: 11.61s $\rightarrow$ **COMPLETED**.
 
 ---
 

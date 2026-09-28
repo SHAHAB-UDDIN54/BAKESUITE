@@ -48,18 +48,37 @@ def run_training_pipeline() -> Dict[str, Any]:
     lgbm_model.save()
     print("  [OK] LightGBM quantile boosters trained and saved.")
 
-    # 5. Fit SARIMAX Baselines & Ensemble
-    print("[3/5] Fitting SARIMAX weekly baselines and ensemble weights...")
-    sarimax_model = SarimaxBaselineModel()
+    # 5. Fit SARIMAX Baselines & Persist
+    print("[3/5] Fitting and persisting SARIMAX weekly seasonal models...")
+    sarimax_model = SarimaxBaselineModel(model_dir=models_dir)
     branches = df_features['branch_id'].unique()
     categories = df_features['category_id'].unique()
 
+    fitted_sarimax_count = 0
     for b in branches:
         for c in categories:
-            sarimax_model.fit_branch_category(df_features, b, c)
+            if sarimax_model.fit_branch_category(df_features, b, c):
+                fitted_sarimax_count += 1
+    sarimax_model.save(models_dir)
+    print(f"  [OK] SARIMAX models fitted ({fitted_sarimax_count} series) and persisted to {models_dir}.")
 
-    ensemble = P50WeightedEnsemble()
-    print("  [OK] SARIMAX models and P50 ensemble initialized.")
+    # 6. Fit & Persist Ensemble Weights on validation data
+    ensemble = P50WeightedEnsemble(model_dir=models_dir)
+    for b in branches:
+        b_df = df_features[df_features['branch_id'] == b].tail(100)
+        if len(b_df) >= 20:
+            y_b = b_df['demand'].values
+            _, lgb_p50_b, _ = lgbm_model.predict_quantiles(b_df)
+            
+            exog_b = b_df[['is_weekend_spike', 'ramadan_flag', 'last_ten_nights_flag', 'chand_raat_flag', 'holiday_flag']].astype(float).values
+            sar_preds_b = []
+            for row_idx, (_, r_row) in enumerate(b_df.iterrows()):
+                pred = sarimax_model.predict(b, r_row['category_id'], steps=1, exog_future=exog_b[[row_idx]])
+                sar_preds_b.append(pred[0] if pred is not None else lgb_p50_b[row_idx])
+            
+            ensemble.fit_weights(b, y_b, lgb_p50_b, np.array(sar_preds_b))
+    ensemble.save(models_dir)
+    print("  [OK] Learned NNLS ensemble weights persisted to disk.")
 
     # 6. Backtest Evaluation (Folds & Metrics)
     print("[4/5] Executing 6-fold rolling-origin backtest evaluation...")

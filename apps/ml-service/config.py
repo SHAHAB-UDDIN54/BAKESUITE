@@ -17,4 +17,8 @@ class Settings:
     TIMEZONE: str = os.getenv("TIMEZONE", "Asia/Karachi")
     ALLOWED_ORIGINS: list = [o.strip() for o in os.getenv("ML_ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000,http://localhost:8000").split(",") if o.strip()]
 
+    # Business rule elasticity adjustment for promotional scenario rescoring:
+    # 1.5% demand uplift per 1% promotional depth (Documented business rule adjustment, not a learned ML weight)
+    PROMOTION_BUSINESS_RULE_ELASTICITY: float = float(os.getenv("PROMOTION_BUSINESS_RULE_ELASTICITY", "0.015"))
+    
 settings = Settings()

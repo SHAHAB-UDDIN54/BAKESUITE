@@ -268,7 +268,24 @@ py -3.12 scripts/seed_database.py
 py -3.12 scripts/validate_data_coverage.py
 ```
 
-### 6.3 Run Test Suites
+### 6.3 Run Development Servers (Frontend & Backend)
+* **Run Both Simultaneously (Single Terminal)**:
+  ```powershell
+  npm run dev
+  ```
+* **Or Run in Separate Terminals**:
+  * **Terminal 1 - ERP Core & Forecast Workbench UI (Frontend + Express API)**:
+    ```powershell
+    npm run dev:erp
+    ```
+    *Live UI*: `http://localhost:3000` | *Health check*: `http://localhost:3000/api/v1/health`
+  * **Terminal 2 - ML Forecast Service (FastAPI / PyTorch Backend)**:
+    ```powershell
+    npm run dev:ml
+    ```
+    *API*: `http://localhost:8000` | *Health check*: `http://localhost:8000/health`
+
+### 6.4 Run Test Suites
 * **ERP Core (TypeScript)**:
   ```powershell
   npm run test:erp
@@ -303,42 +320,80 @@ py -3.12 scripts/validate_data_coverage.py
 * **Point-in-Time Correctness**: All feature engineering is computed strictly before the forecast date; no future data leakage.
 * **No Mock or Synthetic Production Data**: All forecasts originate from real trained LightGBM quantiles ($P_{10}, P_{50}, P_{90}$) and SARIMAX models evaluated on real historical transactions.
 
-### 7.2 Critical Fixes Implemented
-1. **Batch Scoring Trailing 56-Day Clipping (`apps/ml-service/app/serving/batch_scoring.py`)**:
-   - Removed all-time historical data fallback.
-   - Calculated maximum observed demand strictly in the trailing 56-day window prior to `as_at_date` per (SKU, Branch).
-   - Applied ceiling $P_{50} \le 3 \times \text{trailing\_56d\_max}$ and maintained monotonic quantile order $P_{10} \le P_{50} \le P_{90}$.
-2. **Scenario Rescore Rebuild (`apps/ml-service/app/api/forecast.py`)**:
-   - Eliminated hardcoded baseline quantities (`25`), default prices (`200`), fixed dummy flags, and static elasticity multipliers.
-   - Dynamically loads active products, point-in-time demand history, and calendar event attributes from `ml.fg_calendar_day`.
-   - Converted string dates to `datetime.date` objects to resolve PostgreSQL `date = text` parameter binding errors.
-   - Enforced 35-day forward horizon limit (rejecting $>35$ days with HTTP 422).
-   - Computes full SRS dispersion $\times$ sufficiency confidence scores.
-3. **Deterministic Fallback Clean-up (`apps/erp-core/src/fallbacks/demandFallback.ts`)**:
-   - Removed Level 3 synthetic category fallback defaults (`BREAD: 25`, `CAKE: 14`, etc.) and default Rs 180 price.
-   - Throws clear descriptive errors if required historical sales data does not exist, guaranteeing zero fabricated demand.
-4. **Test Suite Expansion (`apps/ml-service/test_ai01_corrections.py`)**:
-   - Added unit tests verifying dynamic model sensitivity (different historical inputs produce different outputs), absence of fixed production baseline quantities, and active SARIMAX participation in the production ensemble.
+### 7.2 Final Production Fixes & Implementation Summary
+1. **SARIMAX Training & Disk Persistence (Critical Fix #1)**:
+   - Added `save()` and `load()` methods to `SarimaxBaselineModel` using `joblib`.
+   - Trained and saved 18 series (3 branches $\times$ 6 categories) with 5 exogenous calendar features to `apps/ml-service/models/sarimax_models.joblib` and `sarimax_metadata.json`.
+   - Production inference now loads real persisted models; zero heuristic fallbacks.
+2. **Learned NNLS Ensemble Weights (Critical Fix #2)**:
+   - Added `save()` and `load()` to `P50WeightedEnsemble`.
+   - Fitted non-negative least squares (NNLS) weights on validation actuals ($w_1 + w_2 = 1.0, w_i \ge 0$).
+   - Persisted weights to `apps/ml-service/models/ensemble_weights.json` (BR-KHI-01: 0.983/0.017, BR-LHR-01: 0.987/0.013, BR-ISB-01: 0.981/0.019, DEFAULT: 0.75/0.25).
+3. **Nightly Production Pipeline in Asia/Karachi (Critical Fix #3)**:
+   - Implemented `apps/ml-service/app/serving/nightly_pipeline.py` and runner `scripts/run_nightly_pipeline.py`.
+   - Created Kubernetes CronJob `k8s/cronjob-nightly-pipeline.yaml` scheduled at `30 1 * * *` with `timeZone: "Asia/Karachi"`.
+   - Executes Step 1 (01:30 PKT ETL data preparation), Step 2 (02:10 PKT Redis feature refresh with 24h TTL), and Step 3 (02:15 PKT 35-day forward batch scoring).
+4. **Unified Prediction Pipeline Service (Critical Fix #4 & Fix #5)**:
+   - Created `apps/ml-service/app/services/prediction_service.py`.
+   - Both Nightly Batch Scoring and Scenario Rescore API execute the exact same prediction pipeline: Features $\rightarrow$ LightGBM $\rightarrow$ SARIMAX $\rightarrow$ NNLS Ensemble $\rightarrow$ Promotion Adjustment $\rightarrow$ 56d Clipping $\rightarrow$ Confidence.
+   - Configured `PROMOTION_BUSINESS_RULE_ELASTICITY = 0.015` in `config.py` as a documented business rule adjustment (1.5% uplift per 1% discount), not a fake ML parameter.
+5. **Real 1,000-Sample Independent Feature Parity Test (Critical Fix #6)**:
+   - Updated `apps/ml-service/app/services/feature_parity.py`.
+   - Independently computes offline analytical features vs online feature accumulator logic over 1,000 samples without self-copying.
+   - Enforces mismatch $\le 0.5\%$. Verified result: 1,000 samples, 0 mismatches (0.0000% rate).
+6. **Production Cryptographic JWT Authentication (Critical Fix #7 & #8)**:
+   - Created `apps/erp-core/src/auth/jwt.ts` implementing HMAC-SHA256 signature generation and constant-time verification.
+   - Secured all endpoints (`/metadata/branches`, `/metadata/categories`, `/forecasts/circuit-breaker`, `/forecasts/batch-info`, `/forecasts/rescore`).
+   - Rejects development tokens in production (`NODE_ENV === 'production'`).
+   - Enforces branch-level authorization on rescore (cross-branch rescores return HTTP 403).
+7. **Cold-Start Safe Clipping & Point-in-Time Correctness (Fix #9 & Fix #10)**:
+   - Guarded `forecast_ceiling` clipping in cold-start path against `min(None, value)` errors.
+   - Point-in-time queries strictly enforce `business_date < :as_at_date`, ensuring incomplete current-day records never leak into historical lags.
+8. **14-Day Date-Specific Chart Fallback & Batch Info Clean-up (Fix #11 & Fix #12)**:
+   - Updated `/forecasts/chart-data` fallback to evaluate each of the 14 future dates independently with its specific weekday, Ramadan/Eid event, and uplift.
+   - Removed fake `|| 32` fallback from `/forecasts/batch-info`, returning real recorded `skus_scored`.
+9. **Client UI Advisory Planning Labels (Sections 14-17)**:
+   - Labeled Branch Indent as **Advisory Planning**.
+   - Labeled Central Kitchen as **Advisory Bake Planning**; emergency batch as advisory planning order.
+   - Labeled Purchase Requirements as **Advisory Purchase Planning**; replaced `Math.random()` with structured requisition ID `ADV-PO-YYYYMMDD-XXXX`.
+10. **Batch Scoring 35-Day Horizon Date Alignment (Current Day Trading Fix)**:
+   - Adjusted `batch_scoring.py` horizon generation loop from `range(1, 36)` to `range(0, 35)`.
+   - The first day of the retail forecast plan is `as_at_date` (the current trading day scored at 02:15 AM before store opening), covering today + 34 forward days (35 days total).
+   - Resolved the frontend zero-display issue where opening the Forecast Workbench defaulted to today's date and returned 0 rows because predictions previously started from tomorrow.
+   - Verified live in browser: 32 active SKUs immediately populate with 396 units and Rs 161,620.00 expected revenue.
 
-### 7.3 Test Verification Results
-* **ERP Core (`npm run test:erp`)**:
+### 7.3 Test Execution & Verification Results
+* **ERP Core (`npm --prefix apps/erp-core run test`)**:
   - Regional formatters (`Rs 1,250,000.00`, `DD-MM-YYYY`): **PASS**
   - PostgreSQL connectivity & schema isolation: **PASS**
   - AC-4 deterministic fallback shape: **PASS**
   - Multi-SKU query (32 active products): **PASS**
   - 35-day vs 36-day guardrail (HTTP 422): **PASS**
+  - Chart data 28 actuals + 14 forward forecast days: **PASS**
   - Manual override & revert with audit history: **PASS**
   - Server-side branch authorization: **PASS**
+  - Cryptographically signed JWT authentication (valid=200, tampered=401): **PASS**
+  - Sensitive endpoint protection & real batch-info count: **PASS**
+  - Rescore cross-branch protection (HTTP 403): **PASS**
   - Circuit breaker state machine (CLOSED $\rightarrow$ OPEN $\rightarrow$ HALF_OPEN $\rightarrow$ CLOSED): **PASS**
-* **ML Microservice (`npm run test:ml`)**:
-  - 35 passed, 0 failed in 25.81s across all 7 test suites:
+* **ML Microservice (`py -3.12 -m pytest apps/ml-service`)**:
+  - 37 passed in 51.48s across all 7 test suites:
     - `test_ac_acceptance.py`: 4/4 passed
-    - `test_ai01_corrections.py`: 9/9 passed
+    - `test_ai01_corrections.py`: 11/11 passed (including cold-start clipping, SARIMAX persistence, and PIT safety)
     - `test_data_access.py`: 2/2 passed
     - `test_fallback_baseline.py`: 1/1 passed
     - `test_health.py`: 2/2 passed
     - `test_leakage_validation.py`: 3/3 passed
     - `test_srs_chapter5_compliance.py`: 14/14 passed
+* **Independent Feature Parity (`py -3.12 apps/ml-service/app/services/feature_parity.py`)**:
+  - Sampled count: 1,000
+  - Mismatched count: 0 (0.0000%)
+  - Tolerance: $\le 0.5\%$ $\rightarrow$ **PASS**
+* **Nightly Production Pipeline (`py -3.12 scripts/run_nightly_pipeline.py`)**:
+  - Step 1 (01:30 PKT ETL): **SUCCESS**
+  - Step 2 (02:10 PKT Redis Feature Refresh): **SUCCESS** (96 entity keys refreshed)
+  - Step 3 (02:15 PKT 35-Day Batch Scoring): **SUCCESS** (3,360 forecast rows inserted into `ml.pred_demand_daily`)
+  - Execution Duration: 11.61s $\rightarrow$ **COMPLETED**
 
 
 

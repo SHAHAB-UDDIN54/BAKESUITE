@@ -44,8 +44,10 @@ const DEV_TOKENS: Record<string, AuthUser> = {
   }
 };
 
+import { verifyJwt } from './jwt.js';
+
 /**
- * Authentication middleware enforcing verified identity and roles.
+ * Authentication middleware enforcing verified identity, JWT signatures, and roles.
  * Client-supplied headers like 'x-user-id' or 'x-user-branches' are NEVER trusted in production.
  */
 export function authenticateUser(req: Request, res: Response, next: NextFunction) {
@@ -56,13 +58,36 @@ export function authenticateUser(req: Request, res: Response, next: NextFunction
     token = authHeader.substring(7).trim();
   }
 
-  // 1. Verify token against recognized sessions/tokens
-  if (token && DEV_TOKENS[token]) {
-    req.user = DEV_TOKENS[token];
-    return next();
+  // 1. If token is provided, attempt JWT verification first
+  if (token) {
+    if (token.includes('.')) {
+      const jwtResult = verifyJwt(token);
+      if (jwtResult.valid && jwtResult.user) {
+        req.user = jwtResult.user;
+        return next();
+      }
+      return res.status(401).json({
+        error: `Unauthorized: ${jwtResult.error || 'Invalid JWT token'}`,
+        auth_status: 'INVALID_TOKEN'
+      });
+    }
+
+    // 2. In non-production, allow DEV_TOKENS for testing and development convenience
+    if (config.nodeEnv !== 'production') {
+      if (DEV_TOKENS[token]) {
+        req.user = DEV_TOKENS[token];
+        return next();
+      }
+    } else {
+      // In production, reject development token names explicitly
+      return res.status(401).json({
+        error: 'Unauthorized: Production requires a cryptographically signed JWT token',
+        auth_status: 'DEV_TOKENS_FORBIDDEN_IN_PROD'
+      });
+    }
   }
 
-  // 2. In test or development environment, support legacy test identity headers safely
+  // 3. In non-production, support test identity headers or default dev session
   if (config.nodeEnv !== 'production') {
     const testUserId = req.headers['x-user-id'] as string;
     const testUserBranches = req.headers['x-user-branches'] as string;
@@ -87,11 +112,29 @@ export function authenticateUser(req: Request, res: Response, next: NextFunction
     return next();
   }
 
-  // 3. Strict production requirement
+  // 4. Strict production requirement
   return res.status(401).json({
-    error: 'Unauthorized: Valid Authorization Bearer token required for API access',
+    error: 'Unauthorized: Valid Authorization Bearer JWT required for API access',
     auth_status: 'MISSING_OR_INVALID_TOKEN'
   });
+}
+
+/**
+ * Role-based authorization middleware enforcing least-privilege access.
+ */
+export function requireRole(...allowedRoles: Array<'ADMIN' | 'BRANCH_MANAGER' | 'OPS_MANAGER' | 'PLANNER'>) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Unauthorized: Authentication required' });
+    }
+    if (allowedRoles.includes(req.user.role) || req.user.role === 'ADMIN') {
+      return next();
+    }
+    return res.status(403).json({
+      error: `Forbidden: User role '${req.user.role}' lacks permission for this action`,
+      required_roles: allowedRoles
+    });
+  };
 }
 
 /**

@@ -1,0 +1,56 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: bakesuite-ai01-nightly-pipeline
+  namespace: bakesuite
+  labels:
+    app.kubernetes.io/name: ai01-nightly-pipeline
+    app.kubernetes.io/part-of: bakesuite-erp
+spec:
+  # 01:30 AM Asia/Karachi (UTC+5) triggers full nightly pipeline:
+  # 1. 01:30 PKT: ETL & Daily Demand Aggregation
+  # 2. 02:10 PKT: Redis Online Feature Refresh (24h TTL)
+  # 3. 02:15 PKT: 35-Day Forward Probabilistic Batch Scoring (LightGBM + SARIMAX + Ensemble)
+  # 4. 02:15-04:00 PKT: Complete batch window verification
+  timeZone: "Asia/Karachi"
+  schedule: "30 1 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 9000  # 2.5 hour max window (completes before 04:00 PKT)
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: ai01-nightly-pipeline-job
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: nightly-pipeline-runner
+              image: bakesuite-ml-service:1.0.0
+              imagePullPolicy: IfNotPresent
+              command:
+                - "python"
+                - "-m"
+                - "app.serving.nightly_pipeline"
+              env:
+                - name: TIMEZONE
+                  value: "Asia/Karachi"
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: bakesuite-secrets
+                      key: database-url
+                - name: REDIS_URL
+                  value: "redis://bakesuite-redis:6379/0"
+                - name: USE_MOCK_CACHE
+                  value: "false"
+              resources:
+                requests:
+                  cpu: "2000m"
+                  memory: "4Gi"
+                limits:
+                  cpu: "4000m"
+                  memory: "8Gi"
