@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { pool } from '../db/index.js';
-import { authenticateUser } from '../auth/authMiddleware.js';
+import { authenticateUser, verifyBranchAccess } from '../auth/authMiddleware.js';
+import { getKarachiBusinessDate } from '../utils/dateUtils.js';
 
 export const downstreamRouter = Router();
 
@@ -15,7 +16,14 @@ export const downstreamRouter = Router();
  */
 downstreamRouter.get('/erp/indents', authenticateUser, async (req: Request, res: Response) => {
   const branchId = (req.query.branch_id as string) || 'BR-KHI-01';
-  const indentDate = (req.query.indent_date as string) || new Date().toISOString().split('T')[0];
+  const indentDate = (req.query.indent_date as string) || (req.query.date as string) || getKarachiBusinessDate();
+
+  if (!verifyBranchAccess(req.user, branchId)) {
+    return res.status(403).json({
+      error: `Access Denied: User is not authorized for branch ${branchId}`,
+      authorized_branches: req.user?.authorizedBranches || []
+    });
+  }
 
   try {
     // 1. Check if indents already exist in public.branch_indents
@@ -28,9 +36,17 @@ downstreamRouter.get('/erp/indents', authenticateUser, async (req: Request, res:
         p.category_id,
         p.base_price,
         bi.indent_date,
-        bi.p50_demand,
-        bi.suggested_qty,
-        bi.approved_qty,
+        COALESCE(fo.override_quantity, bi.p50_demand) as p50_demand,
+        CASE 
+          WHEN bi.status = 'Approved' THEN bi.suggested_qty
+          WHEN fo.override_quantity IS NOT NULL THEN fo.override_quantity
+          ELSE bi.suggested_qty 
+        END as suggested_qty,
+        CASE
+          WHEN bi.status = 'Approved' THEN bi.approved_qty
+          WHEN fo.override_quantity IS NOT NULL THEN fo.override_quantity
+          ELSE bi.approved_qty
+        END as approved_qty,
         bi.safety_buffer,
         bi.status,
         bi.approved_by,
@@ -38,6 +54,12 @@ downstreamRouter.get('/erp/indents', authenticateUser, async (req: Request, res:
         bi.notes
       FROM public.branch_indents bi
       JOIN public.products p ON bi.sku_id = p.sku_id
+      LEFT JOIN LATERAL (
+        SELECT override_quantity 
+        FROM public.forecast_overrides 
+        WHERE branch_id = bi.branch_id AND sku_id = bi.sku_id AND forecast_date = bi.indent_date AND reason_code != 'REVERT_TO_AI'
+        ORDER BY created_at DESC LIMIT 1
+      ) fo ON true
       WHERE bi.branch_id = $1 AND bi.indent_date = $2
       ORDER BY bi.sku_id ASC;
     `, [branchId, indentDate]);
@@ -47,30 +69,58 @@ downstreamRouter.get('/erp/indents', authenticateUser, async (req: Request, res:
         status: 'SUCCESS',
         branch_id: branchId,
         indent_date: indentDate,
-        indents: existing.rows
+        indents: existing.rows.map(r => ({
+          ...r,
+          forecast_available: r.p50_demand !== null
+        }))
       });
     }
 
-    // 2. If not generated yet, compute initial indents from latest P50 forecast or base demand
+    // 2. If not generated yet, compute initial indents from latest real P50 forecast or override (no fake 45)
     const forecastRows = await pool.query(`
       SELECT 
         p.sku_id,
         p.sku_name,
         p.category_id,
         p.base_price,
-        COALESCE(fo.override_quantity, pd.p50_quantity, 45) as p50_qty
+        COALESCE(fo.override_quantity, pd.p50_quantity) as p50_qty,
+        fo.override_quantity
       FROM public.products p
       LEFT JOIN ml.pred_demand_daily pd ON p.sku_id = pd.sku_id AND pd.branch_id = $1 AND pd.forecast_date = $2
-      LEFT JOIN public.forecast_overrides fo ON p.sku_id = fo.sku_id AND fo.branch_id = $1 AND fo.forecast_date = $2
+      LEFT JOIN LATERAL (
+        SELECT override_quantity 
+        FROM public.forecast_overrides 
+        WHERE branch_id = $1 AND sku_id = p.sku_id AND forecast_date = $2 AND reason_code != 'REVERT_TO_AI'
+        ORDER BY created_at DESC LIMIT 1
+      ) fo ON true
       WHERE p.status = 'ACTIVE'
       ORDER BY p.sku_id ASC;
     `, [branchId, indentDate]);
 
     const initialIndents = [];
     for (const r of forecastRows.rows) {
-      const p50 = parseInt(r.p50_qty, 10) || 45;
-      const buffer = Math.max(1, Math.round(p50 * 0.15));
-      const suggested = p50 + buffer;
+      if (r.p50_qty === null || r.p50_qty === undefined) {
+        initialIndents.push({
+          branch_id: branchId,
+          sku_id: r.sku_id,
+          sku_name: r.sku_name,
+          category_id: r.category_id,
+          base_price: r.base_price,
+          indent_date: indentDate,
+          forecast_available: false,
+          p50_demand: null,
+          suggested_qty: null,
+          approved_qty: null,
+          safety_buffer: null,
+          status: 'FORECAST_UNAVAILABLE'
+        });
+        continue;
+      }
+
+      const p50 = parseInt(r.p50_qty, 10);
+      const isOverridden = r.override_quantity !== null && r.override_quantity !== undefined;
+      const buffer = isOverridden ? 0 : Math.max(1, Math.round(p50 * 0.15));
+      const suggested = isOverridden ? parseInt(r.override_quantity, 10) : (p50 + buffer);
 
       const inserted = await pool.query(`
         INSERT INTO public.branch_indents (
@@ -84,6 +134,7 @@ downstreamRouter.get('/erp/indents', authenticateUser, async (req: Request, res:
 
       initialIndents.push({
         ...inserted.rows[0],
+        forecast_available: true,
         sku_name: r.sku_name,
         category_id: r.category_id,
         base_price: r.base_price
@@ -115,6 +166,13 @@ downstreamRouter.post('/erp/indents/approve', authenticateUser, async (req: Requ
     return res.status(400).json({ error: 'Missing required indent approval fields (indent_id or branch_id + sku_id)' });
   }
 
+  if (branch_id && !verifyBranchAccess(req.user, branch_id)) {
+    return res.status(403).json({
+      error: `Access Denied: User is not authorized for branch ${branch_id}`,
+      authorized_branches: req.user?.authorizedBranches || []
+    });
+  }
+
   try {
     let result;
     if (indent_id) {
@@ -131,7 +189,7 @@ downstreamRouter.post('/erp/indents/approve', authenticateUser, async (req: Requ
         RETURNING *;
       `, [approved_qty !== undefined ? parseInt(approved_qty, 10) : null, newStatus, user, notes, indent_id]);
     } else {
-      const iDate = indent_date || new Date().toISOString().split('T')[0];
+      const iDate = indent_date || getKarachiBusinessDate();
       result = await pool.query(`
         UPDATE public.branch_indents
         SET 
@@ -173,6 +231,13 @@ downstreamRouter.post('/erp/indents/approve-all', authenticateUser, async (req: 
     return res.status(400).json({ error: 'Missing branch_id or indent_date' });
   }
 
+  if (!verifyBranchAccess(req.user, branch_id)) {
+    return res.status(403).json({
+      error: `Access Denied: User is not authorized for branch ${branch_id}`,
+      authorized_branches: req.user?.authorizedBranches || []
+    });
+  }
+
   try {
     const result = await pool.query(`
       UPDATE public.branch_indents
@@ -203,10 +268,18 @@ downstreamRouter.post('/erp/indents/approve-all', authenticateUser, async (req: 
 /**
  * GET /api/v1/erp/production-plans
  * Fetches real production bake plan calculated from approved indents & available equipment.
+ * Removes fake fallback 50 (Task 8). If no demand exists, returns explicit status.
  */
 downstreamRouter.get('/erp/production-plans', authenticateUser, async (req: Request, res: Response) => {
   const branchId = (req.query.branch_id as string) || 'BR-KHI-01';
-  const prodDate = (req.query.production_date as string) || new Date().toISOString().split('T')[0];
+  const prodDate = (req.query.production_date as string) || getKarachiBusinessDate();
+
+  if (!verifyBranchAccess(req.user, branchId)) {
+    return res.status(403).json({
+      error: `Access Denied: User is not authorized for branch ${branchId}`,
+      authorized_branches: req.user?.authorizedBranches || []
+    });
+  }
 
   try {
     // 1. Fetch available production equipment for branch
@@ -217,13 +290,13 @@ downstreamRouter.get('/erp/production-plans', authenticateUser, async (req: Requ
       ORDER BY capacity_units_per_batch DESC;
     `, [branchId]);
 
-    // 2. Fetch required quantities from approved indents or forecast
+    // 2. Fetch real quantities strictly from approved indents or suggested indents (no fake 50)
     const demandRows = await pool.query(`
       SELECT 
         p.sku_id,
         p.sku_name,
         p.category_id,
-        COALESCE(bi.approved_qty, bi.suggested_qty, 50) as target_qty
+        COALESCE(bi.approved_qty, bi.suggested_qty) as target_qty
       FROM public.products p
       LEFT JOIN public.branch_indents bi ON p.sku_id = bi.sku_id AND bi.branch_id = $1 AND bi.indent_date = $2
       WHERE p.status = 'ACTIVE'
@@ -238,8 +311,10 @@ downstreamRouter.get('/erp/production-plans', authenticateUser, async (req: Requ
       const isBread = d.category_id === 'BREAD';
       const eq = isBread ? (defaultRackOven || defaultDeckOven) : defaultDeckOven;
       const cap = eq ? eq.capacity_units_per_batch : 60;
-      const target = parseInt(d.target_qty, 10);
-      const batches = Math.max(1, Math.ceil(target / cap));
+      
+      const hasDemand = d.target_qty !== null && d.target_qty !== undefined;
+      const target = hasDemand ? parseInt(d.target_qty, 10) : null;
+      const batches = (target !== null && target > 0) ? Math.max(1, Math.ceil(target / cap)) : 0;
       const scheduled = batches * cap;
 
       return {
@@ -253,7 +328,7 @@ downstreamRouter.get('/erp/production-plans', authenticateUser, async (req: Requ
         capacity_per_batch: cap,
         batches_required: batches,
         scheduled_production_qty: scheduled,
-        status: 'SCHEDULED'
+        status: hasDemand ? (target! > 0 ? 'SCHEDULED' : 'ZERO_DEMAND') : 'NO_PRODUCTION_QUANTITY'
       };
     });
 
@@ -277,12 +352,19 @@ downstreamRouter.get('/erp/production-plans', authenticateUser, async (req: Requ
 downstreamRouter.post('/erp/production-plans/emergency-batch', authenticateUser, async (req: Request, res: Response) => {
   const branch_id = req.body.branch_id || 'BR-KHI-01';
   const sku_id = req.body.sku_id;
-  const production_date = req.body.production_date || new Date().toISOString().split('T')[0];
+  const production_date = req.body.production_date || getKarachiBusinessDate();
   const shift_name = req.body.shift_name || req.body.shift || 'Emergency Shift';
   const user = req.user?.userId || 'baking-supervisor';
 
   if (!sku_id) {
     return res.status(400).json({ error: 'Missing emergency batch SKU ID' });
+  }
+
+  if (branch_id && !verifyBranchAccess(req.user, branch_id)) {
+    return res.status(403).json({
+      error: `Access Denied: User is not authorized for branch ${branch_id}`,
+      authorized_branches: req.user?.authorizedBranches || []
+    });
   }
 
   try {
@@ -337,10 +419,18 @@ downstreamRouter.post('/erp/production-plans/emergency-batch', authenticateUser,
  * Executes real Bill of Materials (BOM) explosion:
  * Gross Requirement = Sum(Production Plan Qty * Recipe Quantity)
  * Net Requirement = max(0, Gross Requirement - Available Stock - Incoming Stock + Safety Stock)
+ * Removes fake fallback 50 (Task 8). If no demand exists, returns explicit status.
  */
 downstreamRouter.get('/erp/purchase-requirements', authenticateUser, async (req: Request, res: Response) => {
   const branchId = (req.query.branch_id as string) || 'BR-KHI-01';
-  const orderDate = (req.query.order_date as string) || new Date().toISOString().split('T')[0];
+  const orderDate = (req.query.order_date as string) || getKarachiBusinessDate();
+
+  if (!verifyBranchAccess(req.user, branchId)) {
+    return res.status(403).json({
+      error: `Access Denied: User is not authorized for branch ${branchId}`,
+      authorized_branches: req.user?.authorizedBranches || []
+    });
+  }
 
   try {
     // 1. Fetch all raw inventory records
@@ -350,35 +440,56 @@ downstreamRouter.get('/erp/purchase-requirements', authenticateUser, async (req:
       ORDER BY material_name ASC;
     `);
 
-    // 2. Fetch gross requirements by joining indents with recipes
+    // 2. Fetch gross requirements by joining real indents with recipes (no fake 50 fallback)
     const grossRows = await pool.query(`
       SELECT 
         r.ingredient_name,
         r.unit,
         r.unit_cost_pkr,
         r.supplier_name,
-        SUM(COALESCE(bi.approved_qty, bi.suggested_qty, 50) * r.quantity_per_sku) as gross_qty
+        SUM(COALESCE(bi.approved_qty, bi.suggested_qty) * r.quantity_per_sku) as gross_qty
       FROM public.recipes r
       JOIN public.products p ON r.sku_id = p.sku_id
-      LEFT JOIN public.branch_indents bi ON p.sku_id = bi.sku_id AND bi.branch_id = $1 AND bi.indent_date = $2
+      JOIN public.branch_indents bi ON p.sku_id = bi.sku_id AND bi.branch_id = $1 AND bi.indent_date = $2
+      WHERE (bi.approved_qty IS NOT NULL OR bi.suggested_qty IS NOT NULL)
       GROUP BY r.ingredient_name, r.unit, r.unit_cost_pkr, r.supplier_name;
     `, [branchId, orderDate]);
 
     const grossMap = new Map<string, number>();
     for (const g of grossRows.rows) {
-      grossMap.set(g.ingredient_name, parseFloat(g.gross_qty));
+      if (g.gross_qty !== null && g.gross_qty !== undefined) {
+        grossMap.set(g.ingredient_name, parseFloat(g.gross_qty));
+      }
     }
+
+    const hasProductionQuantity = grossRows.rows.length > 0;
 
     // 3. Compute net requirement = max(0, gross - available - incoming + safety)
     const requirements = invRows.rows.map((inv: any) => {
-      const gross = grossMap.get(inv.material_name) || 0.0;
       const avail = parseFloat(inv.available_stock);
       const incoming = parseFloat(inv.incoming_stock);
       const safety = parseFloat(inv.safety_stock);
-      const unitCost = parseFloat(inv.unit_cost_pkr);
+      const unitCost = inv.unit_cost_pkr != null ? parseFloat(inv.unit_cost_pkr) : null;
 
+      if (!hasProductionQuantity || !grossMap.has(inv.material_name)) {
+        return {
+          material_name: inv.material_name,
+          gross_requirement: hasProductionQuantity ? 0 : null,
+          available_stock: avail,
+          incoming_stock: incoming,
+          safety_stock: safety,
+          net_shortfall: null,
+          unit: inv.unit,
+          unit_cost_pkr: unitCost,
+          estimated_cost_pkr: null,
+          supplier_name: inv.supplier_name,
+          status: hasProductionQuantity ? 'No Material Demand' : 'NO_PRODUCTION_QUANTITY'
+        };
+      }
+
+      const gross = grossMap.get(inv.material_name) || 0.0;
       const netShortfall = Math.max(0, Math.round((gross - avail - incoming + safety) * 100) / 100);
-      const estCost = Math.round(netShortfall * unitCost);
+      const estCost = unitCost !== null ? Math.round(netShortfall * unitCost) : null;
 
       return {
         material_name: inv.material_name,
@@ -396,7 +507,7 @@ downstreamRouter.get('/erp/purchase-requirements', authenticateUser, async (req:
     });
 
     return res.json({
-      status: 'SUCCESS',
+      status: hasProductionQuantity ? 'SUCCESS' : 'DATA_REQUIRED',
       order_date: orderDate,
       branch_id: branchId,
       materials: requirements
@@ -410,27 +521,44 @@ downstreamRouter.get('/erp/purchase-requirements', authenticateUser, async (req:
 /**
  * POST /api/v1/erp/purchase-orders
  * Issues and persists a real purchase order into public.purchase_orders.
+ * Strictly requires real supplier name (Task 9) and verified unit cost (Task 10).
  */
 downstreamRouter.post('/erp/purchase-orders', authenticateUser, async (req: Request, res: Response) => {
   const material_name = req.body.material_name || req.body.material_id;
   const required_qty = req.body.required_qty || req.body.quantity;
   const unit = req.body.unit || req.body.unit_of_measure || 'KG';
-  const supplier_name = req.body.supplier_name || req.body.supplier || 'Approved Supplier';
-  const unit_cost_pkr = req.body.unit_cost_pkr || req.body.unit_price || 150;
+  const supplier_name = req.body.supplier_name || req.body.supplier;
+  const unit_cost_pkr = req.body.unit_cost_pkr !== undefined ? req.body.unit_cost_pkr : req.body.unit_price;
   const order_date = req.body.order_date;
   const notes = req.body.notes;
   const user = req.user?.userId || 'procurement-manager';
 
-  if (!material_name || !required_qty || !supplier_name) {
-    return res.status(400).json({ error: 'Missing required purchase order fields (material_name, quantity, supplier_name)' });
+  if (!material_name || !required_qty) {
+    return res.status(400).json({ error: 'Missing required purchase order fields (material_name, quantity)' });
   }
 
-  const dateStr = order_date || new Date().toISOString().split('T')[0];
+  // Task 9: Require real supplier name (no fake 'Approved Supplier')
+  if (!supplier_name || typeof supplier_name !== 'string' || supplier_name.trim() === '' || supplier_name === 'Approved Supplier') {
+    return res.status(422).json({
+      error: 'supplier_required: A verified, valid supplier name must be provided',
+      field: 'supplier_name'
+    });
+  }
+
+  // Task 10: Require actual supplier price (no fake 150 PKR)
+  if (unit_cost_pkr === undefined || unit_cost_pkr === null || isNaN(parseFloat(unit_cost_pkr)) || parseFloat(unit_cost_pkr) <= 0) {
+    return res.status(422).json({
+      error: 'unit_cost_required: Actual supplier unit price is required to issue purchase order',
+      field: 'unit_cost_pkr'
+    });
+  }
+
+  const dateStr = order_date || getKarachiBusinessDate();
   const dateCompact = dateStr.replace(/-/g, '');
   const poId = `PO-${dateCompact}-${Math.floor(1000 + Math.random() * 9000)}`;
   const qty = parseFloat(required_qty);
-  const cost = parseFloat(unit_cost_pkr || '150');
-  const total = Math.round(qty * cost);
+  const cost = parseFloat(unit_cost_pkr);
+  const total = Math.round(qty * cost * 100) / 100;
 
   try {
     const result = await pool.query(`
@@ -438,7 +566,7 @@ downstreamRouter.post('/erp/purchase-orders', authenticateUser, async (req: Requ
         po_id, supplier_name, material_name, order_date, required_qty, unit, unit_cost_pkr, total_amount_pkr, status, issued_by, notes
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'APPROVED', $9, $10)
       RETURNING *;
-    `, [poId, supplier_name, material_name, dateStr, qty, unit, cost, total, user, notes]);
+    `, [poId, supplier_name.trim(), material_name, dateStr, qty, unit, cost, total, user, notes]);
 
     return res.json({
       status: 'APPROVED',

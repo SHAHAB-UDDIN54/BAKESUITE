@@ -226,4 +226,37 @@ def test_point_in_time_query_correctness():
         # Historical queries with `< :scoring_date` will never see >= scoring_date rows
         assert future_rows is not None
 
+def test_task1_cold_start_p10_ordering_and_definition():
+    """Task 1: Verify cold-start generates p10, p50, p90 where p10 <= p50 <= p90 and p10 is strictly defined."""
+    from app.models.cold_start import cold_start_model
+    forecast_dates = [pd.Timestamp(date(2026, 9, 30) + timedelta(days=i)) for i in range(35)]
+    preds = cold_start_model.predict_cold_start(
+        sku_id="SKU-NEW-01",
+        category_id="CAKE",
+        branch_id="BR-KHI-01",
+        forecast_dates=forecast_dates,
+        launch_week_actual_sum=0.0
+    )
+    assert len(preds) == 35
+    for cp in preds:
+        assert "p10_quantity" in cp
+        assert "p50_quantity" in cp
+        assert "p90_quantity" in cp
+        p10 = cp["p10_quantity"]
+        p50 = cp["p50_quantity"]
+        p90 = cp["p90_quantity"]
+        assert p10 is not None and p50 is not None and p90 is not None
+        assert p10 <= p50 <= p90
+        assert cp["confidence_score"] <= 0.45
+        assert cp["cold_start_flag"] is True
+
+def test_task2_insufficient_data_no_fake_metrics():
+    """Task 2: Verify BacktestEngine returns empty folds on insufficient data and does NOT fabricate metrics."""
+    from app.training.backtest_engine import BacktestEngine
+    engine_bt = BacktestEngine(n_folds=6, eval_days=28, gap_days=1)
+    empty_df = pd.DataFrame(columns=['business_date', 'demand'])
+    folds = engine_bt.generate_folds(empty_df)
+    assert folds == []
+
+
 

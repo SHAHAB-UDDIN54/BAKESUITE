@@ -110,27 +110,56 @@ def run_training_pipeline() -> Dict[str, Any]:
     folds = backtest.generate_folds(df_features)
 
     # Evaluate on the final holdout fold
+    if not folds or len(folds) == 0:
+        print("    [WARNING] Insufficient evaluation data: No folds generated.")
+        print("[5/5] Training pipeline execution completed with INSUFFICIENT_DATA.")
+        print("==========================================================")
+        return {
+            "status": "INSUFFICIENT_DATA",
+            "sku_wape": None,
+            "cat_wape": None,
+            "branch_wape": None,
+            "mpe": None,
+            "p90_coverage": None,
+            "p10_coverage": None,
+            "targets_met": False,
+            "message": "Insufficient evaluation data to generate folds"
+        }
+
     final_fold = folds[-1]
     eval_df = df_features.loc[final_fold['eval_idx']].copy()
     
-    if len(eval_df) > 0:
-        y_true = eval_df['demand'].values
-        p10, p50, p90 = lgbm_model.predict_quantiles(eval_df)
+    if len(eval_df) == 0:
+        print("    [WARNING] Insufficient evaluation data: Holdout fold contains 0 evaluation records.")
+        print("[5/5] Training pipeline execution completed with INSUFFICIENT_DATA.")
+        print("==========================================================")
+        return {
+            "status": "INSUFFICIENT_DATA",
+            "sku_wape": None,
+            "cat_wape": None,
+            "branch_wape": None,
+            "mpe": None,
+            "p90_coverage": None,
+            "p10_coverage": None,
+            "targets_met": False,
+            "message": "Insufficient evaluation data in holdout fold"
+        }
 
-        sku_wape = calculate_wape(y_true, p50)
-        mpe = calculate_mpe(y_true, p50)
-        cov_p90 = calculate_quantile_coverage(y_true, p90)
-        cov_p10 = calculate_quantile_coverage(y_true, p10)
+    y_true = eval_df['demand'].values
+    p10, p50, p90 = lgbm_model.predict_quantiles(eval_df)
 
-        # Category level WAPE
-        cat_agg = eval_df.assign(y=y_true, y_hat=p50).groupby(['category_id', 'branch_id', 'business_date']).agg({'y': 'sum', 'y_hat': 'sum'})
-        cat_wape = calculate_wape(cat_agg['y'].values, cat_agg['y_hat'].values)
+    sku_wape = calculate_wape(y_true, p50)
+    mpe = calculate_mpe(y_true, p50)
+    cov_p90 = calculate_quantile_coverage(y_true, p90)
+    cov_p10 = calculate_quantile_coverage(y_true, p10)
 
-        # Branch level WAPE
-        br_agg = eval_df.assign(y=y_true, y_hat=p50).groupby(['branch_id', 'business_date']).agg({'y': 'sum', 'y_hat': 'sum'})
-        branch_wape = calculate_wape(br_agg['y'].values, br_agg['y_hat'].values)
-    else:
-        sku_wape, cat_wape, branch_wape, mpe, cov_p90, cov_p10 = 18.5, 14.2, 9.8, 1.8, 90.5, 9.5
+    # Category level WAPE
+    cat_agg = eval_df.assign(y=y_true, y_hat=p50).groupby(['category_id', 'branch_id', 'business_date']).agg({'y': 'sum', 'y_hat': 'sum'})
+    cat_wape = calculate_wape(cat_agg['y'].values, cat_agg['y_hat'].values)
+
+    # Branch level WAPE
+    br_agg = eval_df.assign(y=y_true, y_hat=p50).groupby(['branch_id', 'business_date']).agg({'y': 'sum', 'y_hat': 'sum'})
+    branch_wape = calculate_wape(br_agg['y'].values, br_agg['y_hat'].values)
 
     print(f"    - SKU-Branch-Day WAPE:     {sku_wape:.2f}% (Target <= 25.0%)")
     print(f"    - Category-Branch-Day WAPE: {cat_wape:.2f}% (Target <= 18.0%)")
@@ -140,6 +169,7 @@ def run_training_pipeline() -> Dict[str, Any]:
     print(f"    - P10 Empirical Coverage:   {cov_p10:.1f}% (Target: 8-12%)")
 
     metrics_report = {
+        "status": "SUCCESS",
         "sku_wape": round(sku_wape, 2),
         "cat_wape": round(cat_wape, 2),
         "branch_wape": round(branch_wape, 2),

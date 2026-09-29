@@ -3,12 +3,19 @@ import path from 'path';
 
 dotenv.config();
 
+const nodeEnv = process.env.NODE_ENV || 'development';
+const jwtSecret = process.env.JWT_SECRET;
+
+if (nodeEnv === 'production' && (!jwtSecret || jwtSecret.trim() === '')) {
+  throw new Error('FATAL: JWT_SECRET environment variable is mandatory when NODE_ENV=production');
+}
+
 export const config = {
   port: parseInt(process.env.PORT || '3000', 10),
-  nodeEnv: process.env.NODE_ENV || 'development',
+  nodeEnv: nodeEnv,
   databaseUrl: process.env.DATABASE_URL || 'postgresql://postgres:@localhost:5432/bakesuite',
   mlServiceUrl: process.env.ML_SERVICE_URL || 'http://localhost:8000',
-  jwtSecret: process.env.JWT_SECRET || (process.env.NODE_ENV === 'production' ? '' : 'bakesuite-default-dev-secret-do-not-use-in-prod-2026'),
+  jwtSecret: jwtSecret || 'bakesuite-default-dev-secret-do-not-use-in-prod-2026',
   allowedOrigins: (process.env.ALLOWED_ORIGINS || 'http://localhost:3000,http://127.0.0.1:3000,http://localhost:5500,http://127.0.0.1:5500,http://localhost:5173,http://127.0.0.1:5173')
     .split(',')
     .map(o => o.trim()),

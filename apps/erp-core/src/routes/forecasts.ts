@@ -4,6 +4,7 @@ import { circuitBreaker } from '../fallbacks/circuitBreaker.js';
 import { config } from '../config/index.js';
 import { pool } from '../db/index.js';
 import { authenticateUser, verifyBranchAccess } from '../auth/authMiddleware.js';
+import { getKarachiBusinessDate, addDays, diffDays, getDefault35DayHorizon } from '../utils/dateUtils.js';
 
 export const forecastsRouter = Router();
 
@@ -151,10 +152,9 @@ forecastsRouter.get('/forecasts/chart-data', authenticateUser, async (req: Reque
       }));
     } else {
       // Fix #11: Fallback 14-day projection - calculate each forward date independently with date-specific calendar & weekday uplifts
+      const todayK = getKarachiBusinessDate();
       for (let i = 1; i <= 14; i++) {
-        const d = new Date();
-        d.setDate(d.getDate() + i);
-        const targetDateStr = d.toISOString().split('T')[0];
+        const targetDateStr = addDays(todayK, i);
         const dayFallback = await calculateDeterministicFallback(branchId, skuId, targetDateStr);
         forecast.push({
           date: targetDateStr,
@@ -275,18 +275,26 @@ forecastsRouter.get('/forecasts/demand', authenticateUser, async (req: Request, 
   const skuId = isMultiSku ? null : rawSkuId;
   const categoryId = (req.query.category as string) || (req.query.category_id as string);
 
-  const todayStr = new Date().toISOString().split('T')[0];
-  const startStr = (req.query.date as string) || (req.query.date_from as string) || todayStr;
-  const endStr = (req.query.date_to as string) || startStr;
+  const karachiToday = getKarachiBusinessDate();
+  let startStr: string;
+  let endStr: string;
+
+  if (req.query.date) {
+    startStr = req.query.date as string;
+    endStr = (req.query.date_to as string) || startStr;
+  } else if (req.query.date_from || req.query.date_to) {
+    startStr = (req.query.date_from as string) || addDays(karachiToday, 1);
+    endStr = (req.query.date_to as string) || addDays(startStr, 34);
+  } else {
+    // Task 5: Default to complete 35-day forward forecast (business_date + 1 to business_date + 35)
+    const defaultHorizon = getDefault35DayHorizon(karachiToday);
+    startStr = defaultHorizon.startDate;
+    endStr = defaultHorizon.endDate;
+  }
 
   // 1. Enforce 35-day horizon limit strictly
-  const dtToday = new Date();
-  dtToday.setHours(0, 0, 0, 0);
-  const dtStart = new Date(startStr);
-  const dtEnd = new Date(endStr);
-
-  const horizonDays = Math.ceil((dtEnd.getTime() - dtToday.getTime()) / (1000 * 60 * 60 * 24));
-  const rangeDays = Math.ceil((dtEnd.getTime() - dtStart.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+  const horizonDays = diffDays(karachiToday, endStr);
+  const rangeDays = diffDays(startStr, endStr) + 1;
 
   if (horizonDays > 35 || rangeDays > 35) {
     const maxH = Math.max(horizonDays, rangeDays);
@@ -334,6 +342,21 @@ forecastsRouter.get('/forecasts/demand', authenticateUser, async (req: Request, 
     res.setHeader('X-Response-Time-Ms', (Date.now() - startTime).toString());
 
     if (!isMultiSku && skuId) {
+      if (startStr !== endStr) {
+        const dates: string[] = [];
+        let curr = startStr;
+        while (curr <= endStr) {
+          dates.push(curr);
+          curr = addDays(curr, 1);
+        }
+        const fallbackResults = await Promise.all(
+          dates.map(async (d) => {
+            const fb = await calculateDeterministicFallback(branchId, skuId, d);
+            return applyOverride(fb);
+          })
+        );
+        return res.json(fallbackResults);
+      }
       const fallbackResult = await calculateDeterministicFallback(branchId, skuId, startStr);
       return res.json(applyOverride(fallbackResult));
     }
@@ -403,6 +426,21 @@ forecastsRouter.get('/forecasts/demand', authenticateUser, async (req: Request, 
     res.setHeader('X-Response-Time-Ms', (Date.now() - startTime).toString());
 
     if (!isMultiSku && skuId) {
+      if (startStr !== endStr) {
+        const dates: string[] = [];
+        let curr = startStr;
+        while (curr <= endStr) {
+          dates.push(curr);
+          curr = addDays(curr, 1);
+        }
+        const fallbackResults = await Promise.all(
+          dates.map(async (d) => {
+            const fb = await calculateDeterministicFallback(branchId, skuId, d);
+            return applyOverride(fb);
+          })
+        );
+        return res.json(fallbackResults);
+      }
       const fallbackResult = await calculateDeterministicFallback(branchId, skuId, startStr);
       return res.json(applyOverride(fallbackResult));
     }

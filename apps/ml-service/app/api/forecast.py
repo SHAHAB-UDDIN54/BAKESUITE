@@ -5,6 +5,7 @@ Enforces 35-day horizon guardrails, inactive SKU exclusion, forecast clipping (3
 cold-start routing, and SRS response shapes.
 """
 import os
+import zoneinfo
 from typing import List, Optional, Dict, Any
 from datetime import date, datetime, timedelta
 import pandas as pd
@@ -43,9 +44,19 @@ def get_demand_forecast(
     Retrieves P10, P50, and P90 probabilistic demand forecast for a SKU (or all branch SKUs) and branch.
     Enforces the 35-day forward horizon limit (HTTP 422 if exceeded).
     """
-    today = datetime.now().date()
-    start_str = date or date_from or today.strftime("%Y-%m-%d")
-    end_str = date_to or start_str
+    karachi_tz = zoneinfo.ZoneInfo("Asia/Karachi")
+    today = datetime.now(karachi_tz).date()
+
+    if date:
+        start_str = date
+        end_str = date_to or start_str
+    elif date_from or date_to:
+        start_str = date_from or (today + timedelta(days=1)).strftime("%Y-%m-%d")
+        end_str = date_to or (datetime.strptime(start_str, "%Y-%m-%d").date() + timedelta(days=34)).strftime("%Y-%m-%d")
+    else:
+        # Default: 35-day forward forecast starting tomorrow (Day 1 through Day 35)
+        start_str = (today + timedelta(days=1)).strftime("%Y-%m-%d")
+        end_str = (today + timedelta(days=35)).strftime("%Y-%m-%d")
 
     try:
         dt_start = datetime.strptime(start_str, "%Y-%m-%d").date()

@@ -36,7 +36,11 @@ class BacktestEngine:
 
     def generate_folds(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
         """Generates 6 expanding window train-test fold splits."""
+        if df is None or df.empty or 'business_date' not in df.columns:
+            return []
         dates = sorted(df['business_date'].unique())
+        if len(dates) == 0:
+            return []
         total_eval_span = (self.n_folds * self.eval_days)
         
         if len(dates) < (total_eval_span + 30):

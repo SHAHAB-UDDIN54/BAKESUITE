@@ -12,6 +12,7 @@ import os
 import sys
 import json
 import uuid
+import time
 from datetime import date, datetime, timedelta
 
 # Ensure ml-service root is in sys.path
@@ -140,8 +141,9 @@ def run_35_day_batch_scoring(feature_date: Optional[date] = None) -> Dict[str, A
             ORDER BY sku_id, branch_id, business_date ASC;
         """), {"as_at_date": as_at_date}).fetchall()
 
-        # Calendar event records for next 35 days (including today as_at_date as day 1 of forward plan)
-        horizon_end = as_at_date + timedelta(days=35)
+        # Calendar event records for 35 future days (Day 1 through Day 35)
+        start_date = as_at_date + timedelta(days=1)
+        horizon_end = as_at_date + timedelta(days=36)
         cal_rows = conn.execute(text("""
             SELECT 
                 gregorian_date, event_name, holiday_flag, ramadan_flag,
@@ -151,14 +153,14 @@ def run_35_day_batch_scoring(feature_date: Optional[date] = None) -> Dict[str, A
             FROM ml.fg_calendar_day
             WHERE gregorian_date >= :start AND gregorian_date < :end
             ORDER BY gregorian_date ASC;
-        """), {"start": as_at_date, "end": horizon_end}).fetchall()
+        """), {"start": start_date, "end": horizon_end}).fetchall()
         cal_map = {r[0]: r for r in cal_rows}
 
         # Check weather availability
         weather_count = conn.execute(text("""
             SELECT COUNT(*) FROM ml.weather_daily
             WHERE weather_date >= :start AND weather_date < :end;
-        """), {"start": as_at_date, "end": horizon_end}).scalar()
+        """), {"start": start_date, "end": horizon_end}).scalar()
         weather_available = (weather_count or 0) > 0
 
     # Index historical daily series by (sku_id, branch_id)
@@ -192,7 +194,7 @@ def run_35_day_batch_scoring(feature_date: Optional[date] = None) -> Dict[str, A
 
     forecast_rows = []
     total_expected_revenue = 0.0
-    forecast_dates = [as_at_date + timedelta(days=d) for d in range(0, 35)]
+    forecast_dates = [as_at_date + timedelta(days=d) for d in range(1, 36)]
 
     # 2. Iterate through each SKU and Branch
     for prod in products:
@@ -310,9 +312,28 @@ def run_35_day_batch_scoring(feature_date: Optional[date] = None) -> Dict[str, A
                 )
                 for cp in cold_preds:
                     f_d = datetime.strptime(cp["forecast_date"], "%Y-%m-%d").date()
-                    # Fix #9: Cold-start safe clipping (do not call min(None, value))
-                    p50 = min(forecast_ceiling, cp["p50_quantity"]) if forecast_ceiling is not None else cp["p50_quantity"]
-                    p90 = max(p50, cp["p90_quantity"])
+                    # Explicitly assign cold-start predictions (Task 1)
+                    p10 = cp["p10_quantity"]
+                    p50 = cp["p50_quantity"]
+                    p90 = cp["p90_quantity"]
+
+                    # Safe clipping against 56-day observed ceiling if positive
+                    clipped = False
+                    if forecast_ceiling is not None and p50 > forecast_ceiling:
+                        p50 = forecast_ceiling
+                        clipped = True
+
+                    p10 = max(1, min(p10, p50))
+                    p90 = max(p50, p90)
+                    if clipped and forecast_ceiling is not None and p90 > int(forecast_ceiling * 1.5):
+                        p90 = int(forecast_ceiling * 1.5)
+
+                    # Enforce strict monotonic ordering: P10 <= P50 <= P90
+                    p10 = max(1, p10)
+                    p50 = max(p10, p50)
+                    p90 = max(p50, p90)
+                    assert p10 <= p50 <= p90
+
                     rev = round(p50 * base_price, 2)
                     total_expected_revenue += rev
                     forecast_rows.append((
@@ -428,24 +449,24 @@ def run_35_day_batch_scoring(feature_date: Optional[date] = None) -> Dict[str, A
 
         # Insert metadata into ml.forecast_runs
         with engine.begin() as conn:
-            duration_ms = int((time.time() - start_time) * 1000)
+            duration_sec = round(time.time() - start_time, 2)
             conn.execute(text("""
                 INSERT INTO ml.forecast_runs (
-                    run_id, model_version, as_of_date, skus_scored, branches_scored, total_predictions, status, duration_ms
+                    run_id, model_version, as_of_date, horizon_days, skus_scored, total_forecasts, status, duration_seconds
                 ) VALUES (
-                    :run_id, :model_version, :as_of_date, :skus_scored, :branches_scored, :total_predictions, 'COMPLETED', :duration_ms
+                    :run_id, :model_version, :as_of_date, :horizon_days, :skus_scored, :total_forecasts, 'COMPLETED', :duration_seconds
                 ) ON CONFLICT (run_id) DO UPDATE SET
                     status = 'COMPLETED',
-                    total_predictions = EXCLUDED.total_predictions,
-                    duration_ms = EXCLUDED.duration_ms;
+                    total_forecasts = EXCLUDED.total_forecasts,
+                    duration_seconds = EXCLUDED.duration_seconds;
             """), {
                 "run_id": run_id,
                 "model_version": champion_version,
                 "as_of_date": as_at_date,
+                "horizon_days": len(forecast_dates),
                 "skus_scored": len(products),
-                "branches_scored": len(branches),
-                "total_predictions": len(forecast_rows),
-                "duration_ms": duration_ms
+                "total_forecasts": len(forecast_rows),
+                "duration_seconds": duration_sec
             })
 
     print(f"  [OK] Model inference batch completed for run {run_id}. Points scored: {len(forecast_rows):,}")

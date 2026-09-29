@@ -38,9 +38,9 @@ async function run() {
   try {
     // 1. Multi-SKU forecast querying
     console.log('  Testing GET /api/v1/ai/forecasts/demand (multi-SKU)...');
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const tomorrowStr = tomorrow.toISOString().split('T')[0];
+    const { getKarachiBusinessDate, addDays } = await import('./utils/dateUtils.js');
+    const businessDate = getKarachiBusinessDate();
+    const tomorrowStr = addDays(businessDate, 1);
 
     const multiRes = await fetch(`${baseUrl}/api/v1/ai/forecasts/demand?branch_id=BR-KHI-01&date=${tomorrowStr}`);
     if (!multiRes.ok) throw new Error(`Multi-SKU fetch failed with status ${multiRes.status}`);
@@ -54,17 +54,21 @@ async function run() {
     }
     console.log(`  [PASS] Multi-SKU query returned ${multiData.length} active SKUs with valid quantiles.`);
 
+    // 1b. Test Task 5: Default date range without dates returns 35 forecast dates
+    console.log('  Testing Task 5: GET /api/v1/ai/forecasts/demand default 35-day horizon without date params...');
+    const defaultHorizonRes = await fetch(`${baseUrl}/api/v1/ai/forecasts/demand?branch_id=BR-KHI-01&sku_id=SKU-BRD-01`);
+    if (!defaultHorizonRes.ok) throw new Error(`Default horizon query failed with status ${defaultHorizonRes.status}`);
+    const defaultHorizonData: any = await defaultHorizonRes.json();
+    if (!Array.isArray(defaultHorizonData) || defaultHorizonData.length !== 35) {
+      throw new Error(`Task 5 violation: Expected exactly 35 forecast dates when dates omitted, got ${Array.isArray(defaultHorizonData) ? defaultHorizonData.length : JSON.stringify(defaultHorizonData)}`);
+    }
+    console.log(`  [PASS] Task 5: Default horizon query returned exactly ${defaultHorizonData.length} future forecast dates.`);
+
     // 2. 35-day vs 36-day guardrail
     console.log('  Testing 35-day vs 36-day horizon guardrail...');
-    const today = new Date();
-    const todayStr = today.toISOString().split('T')[0];
-    const d35 = new Date();
-    d35.setDate(d35.getDate() + 34);
-    const d35Str = d35.toISOString().split('T')[0];
-
-    const d37 = new Date();
-    d37.setDate(d37.getDate() + 37);
-    const d37Str = d37.toISOString().split('T')[0];
+    const todayStr = businessDate;
+    const d35Str = addDays(todayStr, 34);
+    const d37Str = addDays(todayStr, 36);
 
     const d35Res = await fetch(`${baseUrl}/api/v1/ai/forecasts/demand?branch_id=BR-KHI-01&sku_id=SKU-BRD-01&date_from=${todayStr}&date_to=${d35Str}`);
     if (!d35Res.ok && d35Res.status !== 404) {

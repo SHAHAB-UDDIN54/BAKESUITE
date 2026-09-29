@@ -1266,9 +1266,14 @@ async function initializeBakeBatches() {
   const topProducts = (bakedProducts.length > 0 ? bakedProducts : forecastData).slice(0, 10);
 
   bakeBatches = topProducts.map((p, idx) => {
-    const demand = p.override_quantity || p.p50_quantity || 25;
+    const rawDemand = (p.override_quantity !== null && p.override_quantity !== undefined)
+      ? p.override_quantity
+      : ((p.p50_quantity !== null && p.p50_quantity !== undefined) ? p.p50_quantity : null);
+
+    const hasDemand = rawDemand !== null && rawDemand !== undefined && rawDemand > 0;
+    const demand = hasDemand ? rawDemand : null;
     const batchSize = p.category_id === 'BREAD' ? 50 : (p.category_id === 'CAKE' ? 12 : (p.category_id === 'SAVORY' ? 60 : 40));
-    const batchesNeeded = Math.max(1, Math.ceil(demand / batchSize));
+    const batchesNeeded = hasDemand ? Math.max(1, Math.ceil(demand / batchSize)) : null;
 
     let station = 'Deck Oven A';
     let temp = '220°C / 30m';
@@ -1402,9 +1407,9 @@ function filterAndRenderBakeBatches() {
         </div>
       </td>
       <td><span class="cat-badge">${batch.category_id}</span></td>
-      <td><span style="font-family:var(--font-mono); font-weight:600;">${batch.consolidated_demand} PCS</span></td>
+      <td><span style="font-family:var(--font-mono); font-weight:600;">${batch.consolidated_demand !== null && batch.consolidated_demand !== undefined ? `${batch.consolidated_demand} PCS` : '<span style="color:var(--text-muted); font-size:0.85rem;">Demand unavailable</span>'}</span></td>
       <td><span style="font-family:var(--font-mono); color:var(--text-secondary);">${batch.batch_size} / batch</span></td>
-      <td><span style="font-family:var(--font-mono); font-weight:700; color:var(--text-primary);">${batch.batches_required}</span></td>
+      <td><span style="font-family:var(--font-mono); font-weight:700; color:var(--text-primary);">${batch.batches_required !== null && batch.batches_required !== undefined ? batch.batches_required : 'N/A'}</span></td>
       <td><span style="color:var(--text-secondary); font-size:0.85rem;">${batch.assigned_station}</span></td>
       <td><span style="font-family:var(--font-mono); font-size:0.8rem; color:var(--text-muted);">${batch.temp_time}</span></td>
       <td><span class="status-pill ${stageClass}">${batch.current_stage}</span></td>
@@ -1510,15 +1515,19 @@ async function initializePurchaseMaterials() {
       const rawList = Array.isArray(data) ? data : (data.materials || []);
       if (rawList.length > 0) {
         purchaseMaterials = rawList.map((item, idx) => {
-          const reqQty = parseFloat(item.gross_requirement ?? item.gross_required ?? 0);
+          const reqQty = (item.gross_requirement !== null && item.gross_requirement !== undefined)
+            ? parseFloat(item.gross_requirement)
+            : null;
           const avail = parseFloat(item.available_stock ?? 0);
           const incoming = parseFloat(item.incoming_stock ?? item.incoming_orders ?? 0);
           const safety = parseFloat(item.safety_stock ?? 0);
-          const shortfall = (item.net_shortfall !== undefined) 
+          const shortfall = (item.net_shortfall !== undefined && item.net_shortfall !== null) 
             ? parseFloat(item.net_shortfall) 
-            : Math.max(0, Math.round((reqQty - avail - incoming + safety) * 10) / 10);
+            : (reqQty !== null ? Math.max(0, Math.round((reqQty - avail - incoming + safety) * 10) / 10) : null);
           const unit = item.unit || item.unit_of_measure || 'KG';
-          const price = parseFloat(item.unit_cost_pkr ?? item.unit_price ?? 150);
+          const price = (item.unit_cost_pkr !== null && item.unit_cost_pkr !== undefined)
+            ? parseFloat(item.unit_cost_pkr)
+            : (item.unit_price !== null && item.unit_price !== undefined ? parseFloat(item.unit_price) : null);
 
           let cat = item.category || 'Bakery Raw Material';
           const nameLower = (item.material_name || '').toLowerCase();
@@ -1533,14 +1542,15 @@ async function initializePurchaseMaterials() {
             material_id: item.material_id || `MAT-${String(idx + 101)}`,
             material_name: item.material_name,
             category: cat,
-            required_qty: Math.round(reqQty * 10) / 10,
+            required_qty: reqQty !== null ? Math.round(reqQty * 10) / 10 : null,
             current_stock: Math.round(avail),
             incoming_qty: Math.round(incoming),
             safety_stock: Math.round(safety),
             net_shortfall: shortfall,
             unit_of_measure: unit,
             unit_price: price,
-            supplier: item.supplier_name || 'Approved Supplier',
+            supplier: (item.supplier_name && item.supplier_name !== 'Approved Supplier') ? item.supplier_name : null,
+            status: item.status || (shortfall !== null && shortfall > 0 ? 'Shortage Detected' : 'Sufficient Stock'),
             po_drafted: (item.existing_po_status === 'APPROVED' || item.existing_po_status === 'ISSUED')
           };
         });
@@ -1552,21 +1562,8 @@ async function initializePurchaseMaterials() {
     console.warn('[MRP] ERP purchase requirements fetch notice:', err);
   }
 
-  // Graceful fallback standard raw materials if API is temporarily unreachable
-  const defaultMaterials = [
-    { material_id: 'MAT-101', material_name: 'Fine All-Purpose Flour (Maida)', category: 'Grains & Leavening', required_qty: 115, current_stock: 4500, incoming_qty: 2000, safety_stock: 1200, net_shortfall: 0, unit_of_measure: 'KG', unit_price: 140, supplier: 'Fauji Cereals Mills Ltd' },
-    { material_id: 'MAT-102', material_name: 'Refined White Sugar', category: 'Sweeteners & Cocoa', required_qty: 46.7, current_stock: 2800, incoming_qty: 1000, safety_stock: 800, net_shortfall: 0, unit_of_measure: 'KG', unit_price: 160, supplier: 'Jauharabad Sugar Mills' },
-    { material_id: 'MAT-103', material_name: 'Pure Vegetable Ghee & Shortening', category: 'Fats & Oils', required_qty: 18.5, current_stock: 1600, incoming_qty: 800, safety_stock: 500, net_shortfall: 0, unit_of_measure: 'KG', unit_price: 480, supplier: 'Dalda Foods Pakistan' },
-    { material_id: 'MAT-104', material_name: 'Farm Fresh Grade-A Eggs', category: 'Dairy & Eggs', required_qty: 19.2, current_stock: 3200, incoming_qty: 1500, safety_stock: 600, net_shortfall: 0, unit_of_measure: 'KG', unit_price: 320, supplier: 'Al-Hilal Poultry Farms' },
-    { material_id: 'MAT-105', material_name: 'Fresh Pasteurized Whole Milk', category: 'Dairy & Eggs', required_qty: 9.0, current_stock: 1800, incoming_qty: 1000, safety_stock: 400, net_shortfall: 0, unit_of_measure: 'LTR', unit_price: 210, supplier: 'Engro Dairy Foods' },
-    { material_id: 'MAT-106', material_name: "Active Dry Baker's Yeast", category: 'Grains & Leavening', required_qty: 1.8, current_stock: 420, incoming_qty: 200, safety_stock: 100, net_shortfall: 0, unit_of_measure: 'KG', unit_price: 850, supplier: 'Saf-Instant Pakistan' },
-    { material_id: 'MAT-107', material_name: 'Belgian Dark Cocoa Powder & Drops', category: 'Sweeteners & Cocoa', required_qty: 11.5, current_stock: 650, incoming_qty: 300, safety_stock: 150, net_shortfall: 0, unit_of_measure: 'KG', unit_price: 2450, supplier: 'Puratos Food Ingredients' },
-    { material_id: 'MAT-108', material_name: 'Boneless Diced Chicken Breast', category: 'Proteins & Meat', required_qty: 7.9, current_stock: 950, incoming_qty: 500, safety_stock: 300, net_shortfall: 0, unit_of_measure: 'KG', unit_price: 880, supplier: "K&N's Commercial Supplies" },
-    { material_id: 'MAT-109', material_name: 'Almonds & Pistachio Kernels', category: 'Nuts & Aromatics', required_qty: 2.6, current_stock: 310, incoming_qty: 150, safety_stock: 80, net_shortfall: 0, unit_of_measure: 'KG', unit_price: 2900, supplier: 'Swat Valley Dry Fruits Corp' },
-    { material_id: 'MAT-110', material_name: 'Traditional Baking Spices & Cardamom', category: 'Nuts & Aromatics', required_qty: 0.9, current_stock: 180, incoming_qty: 100, safety_stock: 40, net_shortfall: 0, unit_of_measure: 'KG', unit_price: 1650, supplier: 'National Foods Spice Division' }
-  ];
-
-  purchaseMaterials = defaultMaterials.map(m => ({ ...m, po_drafted: false }));
+  // If API returns no data or fails, display empty state (no fake defaultMaterials)
+  purchaseMaterials = [];
   filterAndRenderPurchase();
 }
 
@@ -1642,10 +1639,11 @@ function filterAndRenderPurchase() {
 
   filtered.forEach(m => {
     const tr = document.createElement('tr');
-    const shortfall = (m.net_shortfall !== undefined) ? m.net_shortfall : 0;
-    const totalCost = shortfall > 0 ? (shortfall * m.unit_price) : (m.required_qty * m.unit_price);
+    const shortfall = (m.net_shortfall !== undefined && m.net_shortfall !== null) ? m.net_shortfall : 0;
+    const hasPrice = m.unit_price !== null && m.unit_price !== undefined && m.unit_price > 0;
+    const totalCost = hasPrice ? (shortfall > 0 ? (shortfall * m.unit_price) : ((m.required_qty || 0) * m.unit_price)) : null;
 
-    let statusLabel = 'Adequate Stock';
+    let statusLabel = m.status || 'Adequate Stock';
     let statusClass = 'approved';
     let actionBtn = `<button class="btn-action" onclick="generateSinglePO('${m.material_id}')" style="opacity:0.9;">Order PO</button>`;
 
@@ -1663,6 +1661,11 @@ function filterAndRenderPurchase() {
       actionBtn = `<button class="btn-action btn-accent" onclick="generateSinglePO('${m.material_id}')">Generate PO</button>`;
     }
 
+    const reqQtyDisplay = m.required_qty !== null ? `${m.required_qty} ${m.unit_of_measure}` : '<span style="color:var(--text-muted); font-size:0.85rem;">Data required</span>';
+    const rateDisplay = hasPrice ? formatPKR(m.unit_price) : '<span style="color:var(--text-muted); font-size:0.85rem;">Price unavailable</span>';
+    const costDisplay = totalCost !== null ? formatPKR(totalCost) : '<span style="color:var(--text-muted);">--</span>';
+    const supplierDisplay = m.supplier ? m.supplier : '<span style="color:var(--text-muted); font-size:0.85rem;">No supplier</span>';
+
     tr.innerHTML = `
       <td>
         <div class="sku-cell">
@@ -1671,12 +1674,12 @@ function filterAndRenderPurchase() {
         </div>
       </td>
       <td><span class="cat-badge">${m.category}</span></td>
-      <td><span style="font-family:var(--font-mono); font-weight:600;">${m.required_qty} ${m.unit_of_measure}</span></td>
+      <td><span style="font-family:var(--font-mono); font-weight:600;">${reqQtyDisplay}</span></td>
       <td><span style="font-family:var(--font-mono); color:var(--text-secondary);">${m.current_stock} ${m.unit_of_measure}</span></td>
       <td><span style="font-family:var(--font-mono); font-weight:700; color:${shortfall > 0 ? 'var(--accent-rose)' : 'var(--accent-emerald)'};">${shortfall > 0 ? `${shortfall} ${m.unit_of_measure}` : '0 (Adequate)'}</span></td>
-      <td><span style="font-family:var(--font-mono); color:var(--text-secondary);">${formatPKR(m.unit_price)}</span></td>
-      <td><span class="sales-val">${formatPKR(totalCost)}</span></td>
-      <td><span style="color:var(--text-secondary); font-size:0.85rem;">${m.supplier}</span></td>
+      <td><span style="font-family:var(--font-mono); color:var(--text-secondary);">${rateDisplay}</span></td>
+      <td><span class="sales-val">${costDisplay}</span></td>
+      <td><span style="color:var(--text-secondary); font-size:0.85rem;">${supplierDisplay}</span></td>
       <td><span class="status-pill ${statusClass}">${statusLabel}</span></td>
       <td>
         ${actionBtn}
@@ -1689,8 +1692,27 @@ function filterAndRenderPurchase() {
 window.generateSinglePO = async function(matId) {
   const m = purchaseMaterials.find(item => item.material_id === matId);
   if (!m) return;
-  const shortfall = (m.net_shortfall !== undefined && m.net_shortfall > 0) ? m.net_shortfall : (m.required_qty > 0 ? m.required_qty : 50);
-  const orderQty = Math.max(10, Math.round(shortfall));
+
+  if (!m.supplier || m.supplier === 'Approved Supplier' || m.supplier === 'No contracted supplier') {
+    showToast('Cannot issue PO: Verified, contracted supplier name is required.', 'warning');
+    return;
+  }
+
+  if (m.unit_price === null || m.unit_price === undefined || m.unit_price <= 0) {
+    showToast('Cannot issue PO: Actual supplier unit price is required.', 'warning');
+    return;
+  }
+
+  const shortfall = (m.net_shortfall !== undefined && m.net_shortfall !== null && m.net_shortfall > 0)
+    ? m.net_shortfall
+    : (m.required_qty && m.required_qty > 0 ? m.required_qty : 0);
+
+  if (shortfall <= 0) {
+    showToast('Cannot issue PO: No order quantity required for this material.', 'warning');
+    return;
+  }
+
+  const orderQty = Math.round(shortfall * 10) / 10;
 
   try {
     const res = await fetch(`${API_BASE}/api/v1/erp/purchase-orders`, {
@@ -1710,14 +1732,15 @@ window.generateSinglePO = async function(matId) {
       filterAndRenderPurchase();
       showToast(`Purchase Order ${data.purchase_order?.po_id || data.po_number || 'PO-OK'} released for ${m.material_name} (${orderQty} ${m.unit_of_measure}). Persisted to ERP.`, 'success');
       return;
+    } else {
+      const err = await res.json();
+      showToast(`PO creation rejected: ${err.error || 'Server error'}`, 'warning');
+      return;
     }
   } catch (err) {
-    console.warn('[PO] Persistence notice:', err);
+    console.error('[PO] Persistence error:', err);
+    showToast(`Failed to connect to ERP Core to persist Purchase Order: ${err.message}`, 'warning');
   }
-
-  m.po_drafted = true;
-  filterAndRenderPurchase();
-  showToast(`Advisory Purchase Order issued for ${m.material_name} (${orderQty} ${m.unit_of_measure}).`, 'success');
 };
 
 function exportPurchaseCSV() {
