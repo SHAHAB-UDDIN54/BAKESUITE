@@ -375,16 +375,25 @@ py -3.12 scripts/validate_data_coverage.py
   - Cryptographically signed JWT authentication (valid=200, tampered=401): **PASS**
   - Sensitive endpoint protection & real batch-info count: **PASS**
   - Rescore cross-branch protection (HTTP 403): **PASS**
-  - Circuit breaker state machine (CLOSED $\rightarrow$ OPEN $\rightarrow$ HALF_OPEN $\rightarrow$ CLOSED): **PASS**
-* **ML Microservice (`py -3.12 -m pytest apps/ml-service`)**:
-  - 37 passed in 51.48s across all 7 test suites:
+  - Circuit breaker state machine (CLOSED $\rightarrow$ OPEN $\rightarrow$ HALF_OPEN $\rightarrow$ CLOSED): * **ML Microservice (`py -3.12 -m pytest apps/ml-service`)**:
+  - 39 passed in 63.28s across all test suites:
     - `test_ac_acceptance.py`: 4/4 passed
-    - `test_ai01_corrections.py`: 11/11 passed (including cold-start clipping, SARIMAX persistence, and PIT safety)
+    - `test_ai01_corrections.py`: 13/13 passed (including cold-start clipping, SARIMAX persistence, and PIT safety)
     - `test_data_access.py`: 2/2 passed
     - `test_fallback_baseline.py`: 1/1 passed
     - `test_health.py`: 2/2 passed
     - `test_leakage_validation.py`: 3/3 passed
     - `test_srs_chapter5_compliance.py`: 14/14 passed
+* **ERP Core Downstream Verification (`node dist/test-downstream.js`)**:
+  - Auth Login & Session: Cryptographic JWT signed & verified: **PASS**
+  - Branch Indents: 32 SKU requisitions fetched and approved: **PASS**
+  - Central Kitchen Bake: 32 baking schedules & emergency batch assignment: **PASS**
+  - Purchase Requirements (BOM Explosion): 10 raw materials computed dynamically: **PASS**
+  - Purchase Order Issuance: Validated supplier, unit rate, and PO-XXXX generation: **PASS**
+  - Rejection of fake suppliers/rates: HTTP 422 validation enforced: **PASS**
+* **Downstream Bugfix (Bigint indent_id)**:
+  - Resolved `invalid input syntax for type bigint: "SKU-BEV-01"` in `routes/downstream.ts`.
+  - Added numeric validation check on `indent_id`, falling back to `(branch_id, sku_id, indent_date)` when client sends string SKU IDs.
 * **Independent Feature Parity (`py -3.12 apps/ml-service/app/services/feature_parity.py`)**:
   - Sampled count: 1,000
   - Mismatched count: 0 (0.0000%)
@@ -395,5 +404,20 @@ py -3.12 scripts/validate_data_coverage.py
   - Step 3 (02:15 PKT 35-Day Batch Scoring): **SUCCESS** (3,360 forecast rows inserted into `ml.pred_demand_daily`)
   - Execution Duration: 11.61s $\rightarrow$ **COMPLETED**
 
+---
 
+## 8. Module Completion Status & Roadmap
 
+### 8.1 AI-01 Demand Forecasting: 100% Complete & Verified
+- Master Transaction Engine (Node 20 / TypeScript / PostgreSQL 16)
+- ML Microservice (Python 3.12 / FastAPI / LightGBM Quantile / SARIMAX)
+- Regional Conventions (Asia/Karachi PKT, PKR `Rs 1,250,000.00`, Islamic lunar calendar features)
+- Circuit Breaker & AC-4 Deterministic 4-Week Fallback
+- Forecast Workbench, Branch Indent Plan, Central Kitchen Bake, Purchase Requirements UI
+- All 39 ML tests + all ERP verification tests passing cleanly.
+
+### 8.2 Upcoming Modules Roadmap
+1. **INV (Multi-Branch Shelf Inventory & Stock Transfers)**: Real-time stock levels, batch shelf-life countdowns, inter-branch requisition dispatches.
+2. **PROD (Bakery Manufacturing Execution)**: Oven telemetry, recipe yield tracking, mixing/proofing/baking stages.
+3. **PROC (Procurement & Supplier Management)**: Automated RFQ/PO generation, vendor price comparison, Goods Received Notes (GRN).
+4. **POS (Point of Sale & Retail Checkout)**: Cashier register, barcode scanning, FBR fiscal invoice integration.

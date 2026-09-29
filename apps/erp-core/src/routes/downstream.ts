@@ -175,7 +175,8 @@ downstreamRouter.post('/erp/indents/approve', authenticateUser, async (req: Requ
 
   try {
     let result;
-    if (indent_id) {
+    const isNumericIndent = indent_id !== undefined && indent_id !== null && !isNaN(Number(indent_id)) && String(indent_id).trim() !== '';
+    if (isNumericIndent) {
       result = await pool.query(`
         UPDATE public.branch_indents
         SET 
@@ -187,7 +188,7 @@ downstreamRouter.post('/erp/indents/approve', authenticateUser, async (req: Requ
           updated_at = CURRENT_TIMESTAMP
         WHERE indent_id = $5
         RETURNING *;
-      `, [approved_qty !== undefined ? parseInt(approved_qty, 10) : null, newStatus, user, notes, indent_id]);
+      `, [approved_qty !== undefined ? parseInt(approved_qty, 10) : null, newStatus, user, notes, Number(indent_id)]);
     } else {
       const iDate = indent_date || getKarachiBusinessDate();
       result = await pool.query(`
@@ -201,7 +202,7 @@ downstreamRouter.post('/erp/indents/approve', authenticateUser, async (req: Requ
           updated_at = CURRENT_TIMESTAMP
         WHERE branch_id = $5 AND sku_id = $6 AND indent_date = $7
         RETURNING *;
-      `, [approved_qty !== undefined ? parseInt(approved_qty, 10) : null, newStatus, user, notes, branch_id, sku_id, iDate]);
+      `, [approved_qty !== undefined ? parseInt(approved_qty, 10) : null, newStatus, user, notes, branch_id || 'BR-KHI-01', sku_id, iDate]);
     }
 
     if (result.rows.length === 0) {

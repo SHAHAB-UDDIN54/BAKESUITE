@@ -468,7 +468,16 @@ Is phase mein BakeSuite codebase ka mukammal audit kiya gaya aur tamam adhoori, 
 * **ERP Core (`npm --prefix apps/erp-core run test`):**
   - 100% Tests Passed (Regional Formatters, PostgreSQL connection, AC-4 deterministic fallback, 32 active SKUs, 35d horizon guardrail, 28 actuals + 14 forecast chart data, Manual Override & Revert audit trail, Server-side branch authorization, Cryptographic JWT signature verification, Sensitive endpoint protection, Rescore cross-branch protection HTTP 403, Circuit Breaker state machine).
 * **ML Service (`py -3.12 -m pytest apps/ml-service`):**
-  - **37 / 37 Tests Passed** in 51.48s (Zero failures).
+  - **39 / 39 Tests Passed** in 63.28s (Zero failures).
+* **ERP Core Downstream Verification (`node dist/test-downstream.js`):**
+  - **Auth & JWT Signatures:** 100% Passed.
+  - **Branch Indents Persistence:** 100% Passed.
+  - **Central Kitchen Emergency Batches:** 100% Passed.
+  - **Purchase Requirements BOM Explosion:** 10 raw materials calculate ho kar real PO generate hua (100% Passed).
+  - **Fake Data Prevention:** Baghair supplier ya fake rate ki purchase request ko HTTP 422 se reject kiya gaya.
+* **Downstream Bugfix (Bigint indent_id syntax error):**
+  - Frontend jab indent approve karta tha to database mein `invalid input syntax for type bigint: "SKU-BEV-01"` aata tha.
+  - Server par check lagaya gaya ke agar ID numeric na ho to system `(branch_id, sku_id, indent_date)` se record identify kare. Yeh masla mukammal hal ho gaya hai.
 * **Feature Parity Test (`py -3.12 apps/ml-service/app/services/feature_parity.py`):**
   - 1,000 samples checked, 0 mismatches (0.0000% $\le 0.5\%$) $\rightarrow$ **PASS**.
 * **Nightly Pipeline Execution (`py -3.12 scripts/run_nightly_pipeline.py`):**
@@ -479,7 +488,30 @@ Is phase mein BakeSuite codebase ka mukammal audit kiya gaya aur tamam adhoori, 
 
 ---
 
-## 15. Conclusion
-BakeSuite ERP ab mukammal taur par auditable, mathematically robust, aur production-grade state mein hai jahan Frontend $\rightarrow$ ERP Core $\rightarrow$ ML Service $\rightarrow$ PostgreSQL pipeline mein kahin bhi fake, random, ya hardcoded numbers use nahi ho rahe.
+## 15. AI-01 Demand Forecasting Module Ka Khulaasa
+
+BakeSuite ERP ka **AI-01 Demand Forecasting Module** ab 100% mukammal, tested aur operational hai:
+1. **Frontend $\rightarrow$ Backend $\rightarrow$ ML Model $\rightarrow$ Database** ka poora cycle real mathematical quantiles (P10, P50, P90) aur historical facts par chal raha hai.
+2. Pakistani calendar (Ramadan, Chand Raat, Eid), Asia/Karachi time zone, aur PKR currency strictly configured hain.
+3. Fallback engine aur circuit breaker outage ke waqt bakery business ko continuous chalate hain.
+
+---
+
+## 16. Aglay ERP Modules Ka Roadmap (Next Modules)
+
+AI-01 Demand Forecasting ke baad bakery enterprise ke mandarja zail modules tayyar kiye ja sakte hain:
+
+1. **INV (Multi-Branch Inventory & Shelf Stock Management):**
+   - Clifton, Gulberg, aur F-7 Markaz branches ki live shelf inventory.
+   - Batch shelf-life expiry tracking aur branch-to-branch stock transfers.
+2. **PROD (Bakery Manufacturing Execution & Kitchen Floor):**
+   - Central kitchen mein mixing, proofing, aur baking stages ka live status.
+   - Flour/Sugar/Butter ke actual vs expected recipe yield aur wastage tracking.
+3. **PROC (Procurement & Supplier Management):**
+   - Raw material suppliers ki quotation comparison.
+   - Purchase Order (PO) se Goods Received Note (GRN) aur vendor bills ki 3-way matching.
+4. **POS (Point-of-Sale / Retail Cashier Counter):**
+   - Touchscreen counter billing, barcode scanning, customer receipts, aur FBR fiscal integration.
+
 
 

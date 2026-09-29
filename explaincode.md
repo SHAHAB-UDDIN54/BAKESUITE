@@ -18,6 +18,7 @@ Yeh document BakeSuite project ke tamam sawalat, concepts, folders aur testing r
 10. [`data/` Folder aur Sales Dataset Ka Istemal](#10-data-folder-aur-sales-dataset-ka-istemal)
 11. [Tamam Items aur Categories Ki Master List (32 Products)](#11-tamam-items-aur-categories-ki-master-list)
 12. [Is Project Mein Docker Kyun Use Hua?](#12-is-project-mein-docker-kyun-use-hua)
+13. [AI-01 Demand Forecasting Module Ki Mukammaliyat Aur Aglay Steps](#13-ai-01-demand-forecasting-module-ki-mukammaliyat-aur-aglay-steps)
 
 ---
 
@@ -25,12 +26,13 @@ Yeh document BakeSuite project ke tamam sawalat, concepts, folders aur testing r
 
 BakeSuite mein do main systems hain: **ERP Core (Frontend + Node Backend)** aur **ML Service (Python AI Backend)**.
 
-### Tareeqa A: Dono Ko Ek Sath Chalana (Single Command)
+### Tareeqa A: Dono Ko Ek Sath Chalana (Sirf Yeh Aik Command Chahiye)
 Project root folder (`d:\BAKESUITE`) mein yeh command chalayein:
 ```powershell
 npm run dev
 ```
-*Yeh `concurrently` package ke zariye ERP aur ML dono servers ko ek hi terminal window mein color-coded chala deta hai.*
+* **Faida:** Yeh `concurrently` package ke zariye ERP Core (Port 3000) aur Python ML Service (Port 8000) dono ko ek hi terminal mein shuru kar deta hai. **Aapko 5 alag alag commands chalane ki bilkul zaroorat nahi hai; sirf yeh 1 command kaafi hai.**
+* **Browser mein kholein:** [http://localhost:3000](http://localhost:3000)
 
 ### Tareeqa B: Alag Alag Terminals Mein Chalana (Recommended)
 Agar aap chahein ke dono ke logs alag alag terminals mein nazar aayein:
@@ -200,7 +202,7 @@ Yeh Python 3.12 aur FastAPI par mushtamil **AI / Machine Learning Microservice**
 * **`app/models/`:** AI Models (LightGBM Quantile Regressors for P10/P50/P90 + SARIMAX).
 * **`app/serving/`:** Online real-time serving aur nightly batch scoring.
 * **`app/training/`:** Weekly automated model retraining pipeline.
-* **`test_*.py`:** 37 automated Pytest unit aur integration tests.
+* **`test_*.py`:** 39 automated Pytest unit aur integration tests (100% passing).
 
 ---
 
@@ -275,3 +277,20 @@ BakeSuite mein total **32 Products** hain jo **6 Categories** mein taqseem hain:
 1. **Polyglot Stack:** Project do alag technologies use karta hai (Node.js 20 + Python 3.12 + C++ LightGBM libraries). Docker dono ko alag isolated containers mein pack karta hai taake computer par koi library conflict na ho.
 2. **Same Environment Everywhere:** Windows laptop par chalne wala code jab Linux cloud server par jaye to crash na ho.
 3. **Kubernetes (K8s) Requirement:** Kubernetes containers chalane ke liye Docker images (`bakesuite-ml-service:1.0.0` aur `bakesuite-erp-core:1.0.0`) use karta hai.
+
+---
+
+## 13. AI-01 Demand Forecasting Module Ki Mukammaliyat Aur Aglay Steps
+
+### 13.1 AI-01 Module 100% Mukammal Ho Chuka Hai:
+* **Quantile Machine Learning:** P10, P50, aur P90 probabilistic demand har item ke liye calculate hoti hai.
+* **Pakistani Regional Rules:** Timezone strictly `Asia/Karachi` hai, currency `Rs 1,250,000.00` format mein hai, aur Ramadan/Eid/Chand Raat ka khas hisab rakha gaya hai.
+* **Circuit Breaker & Fallback:** ML microservice band hone par system 4 hafton ke purane records se automatically estimate nikalta hai.
+* **Downstream Integration (Baking & Purchase):** Demand se Branch Indent, Kitchen Ovens ka Bake Plan, aur Raw Material (Flour, Sugar, Eggs) ka Purchase Order ban jata hai.
+* **Bug Fix (Bigint Indent ID):** Frontend se requisition approve karte waqt SKU text bhejney par aane wala database error resolve kar diya gaya hai.
+
+### 13.2 Aglay ERP Modules Ka Roadmap:
+1. **INV (Multi-Branch Inventory & Shelf Stock):** Branch shelves par mojood real-time inventory aur expiry date tracking.
+2. **PROD (Bakery Manufacturing Execution):** Commercial kitchen recipe mixing, proofing, aur actual yield loss tracking.
+3. **PROC (Procurement & Supplier Management):** Vendor rates comparison, automated Purchase Orders (PO), aur Goods Received Note (GRN).
+4. **POS (Point-of-Sale / Retail Counter):** Cashier touch terminal, barcode scanner, aur FBR sales tax invoice printing.

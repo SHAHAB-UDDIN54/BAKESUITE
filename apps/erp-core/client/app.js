@@ -1190,7 +1190,10 @@ window.toggleIndentApproval = async function(skuId) {
       method: 'POST',
       headers: authHeaders,
       body: JSON.stringify({
-        indent_id: item.indent_id || skuId,
+        indent_id: item.indent_id || undefined,
+        branch_id: item.branch_id || selectedBranch || 'BR-KHI-01',
+        sku_id: item.sku_id || skuId,
+        indent_date: item.indent_date,
         approved_qty: item.approved_qty,
         status: newStatus
       })
