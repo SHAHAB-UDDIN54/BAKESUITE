@@ -62,23 +62,47 @@ def run_training_pipeline() -> Dict[str, Any]:
     sarimax_model.save(models_dir)
     print(f"  [OK] SARIMAX models fitted ({fitted_sarimax_count} series) and persisted to {models_dir}.")
 
-    # 6. Fit & Persist Ensemble Weights on validation data
+    # 6. Fit & Persist Ensemble Weights on aligned category-level validation data
     ensemble = P50WeightedEnsemble(model_dir=models_dir)
+    exog_cols = ['is_weekend_spike', 'ramadan_flag', 'last_ten_nights_flag', 'chand_raat_flag', 'holiday_flag']
     for b in branches:
-        b_df = df_features[df_features['branch_id'] == b].tail(100)
-        if len(b_df) >= 20:
-            y_b = b_df['demand'].values
-            _, lgb_p50_b, _ = lgbm_model.predict_quantiles(b_df)
-            
-            exog_b = b_df[['is_weekend_spike', 'ramadan_flag', 'last_ten_nights_flag', 'chand_raat_flag', 'holiday_flag']].astype(float).values
-            sar_preds_b = []
-            for row_idx, (_, r_row) in enumerate(b_df.iterrows()):
-                pred = sarimax_model.predict(b, r_row['category_id'], steps=1, exog_future=exog_b[[row_idx]])
-                sar_preds_b.append(pred[0] if pred is not None else lgb_p50_b[row_idx])
-            
-            ensemble.fit_weights(b, y_b, lgb_p50_b, np.array(sar_preds_b))
+        b_df = df_features[df_features['branch_id'] == b].copy()
+        # Use out-of-sample recent validation period
+        val_df = b_df.tail(min(len(b_df), 500)).copy()
+        if len(val_df) >= 30:
+            _, lgb_p50_val, _ = lgbm_model.predict_quantiles(val_df)
+            val_df['lgb_p50'] = lgb_p50_val
+
+            # Aggregate to (category_id, business_date)
+            cat_grouped = val_df.groupby(['category_id', 'business_date']).agg({
+                'demand': 'sum',
+                'lgb_p50': 'sum',
+                'is_weekend_spike': 'max',
+                'ramadan_flag': 'max',
+                'last_ten_nights_flag': 'max',
+                'chand_raat_flag': 'max',
+                'holiday_flag': 'max'
+            }).reset_index()
+
+            cat_actuals = []
+            cat_lgb_list = []
+            cat_sar_list = []
+
+            for _, crow in cat_grouped.iterrows():
+                c_id = crow['category_id']
+                act = float(crow['demand'])
+                lgb_c = float(crow['lgb_p50'])
+                exog_vec = np.array([[crow[col] for col in exog_cols]], dtype=float)
+                pred_sar = sarimax_model.predict(b, c_id, steps=1, exog_future=exog_vec)
+                sar_c = float(pred_sar[0]) if (pred_sar is not None and len(pred_sar) > 0 and np.isfinite(pred_sar[0])) else lgb_c
+
+                cat_actuals.append(act)
+                cat_lgb_list.append(lgb_c)
+                cat_sar_list.append(sar_c)
+
+            ensemble.fit_weights(b, np.array(cat_actuals), np.array(cat_lgb_list), np.array(cat_sar_list))
     ensemble.save(models_dir)
-    print("  [OK] Learned NNLS ensemble weights persisted to disk.")
+    print("  [OK] Level-aligned category NNLS ensemble weights persisted to disk.")
 
     # 6. Backtest Evaluation (Folds & Metrics)
     print("[4/5] Executing 6-fold rolling-origin backtest evaluation...")

@@ -1,6 +1,6 @@
 """
 BakeSuite Database Bootstrap Script
-Initializes the 'bakesuite' database on PostgreSQL 18 and ensures:
+Initializes the 'bakesuite' database on PostgreSQL 16 and ensures:
 - public schema (ERP Core transactions)
 - ml schema (Feature store, model registry, forecasts)
 """

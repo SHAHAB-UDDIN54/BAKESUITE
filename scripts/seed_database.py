@@ -429,6 +429,131 @@ def seed_master_data(conn):
         conn.commit()
     print(f"  [OK] Seeded master data: {len(BRANCHES)} branches, {len(PRODUCT_CATALOG)} products, promotions, stock movements, and weather records.")
 
+def seed_downstream_erp_modules(conn):
+    print("[3.5/5] Seeding Downstream ERP Modules (Users, Equipment, BOM Recipes, Raw Inventory)...")
+    with conn.cursor() as cur:
+        # 1. Users
+        users = [
+            ("USR-ADM-01", "admin", "System Administrator", "admin", "BR-KHI-01", '["forecast.view", "forecast.override", "indent.approve", "production.plan", "purchase.approve"]'),
+            ("USR-MGR-KHI", "manager_khi", "Karachi Branch Manager", "manager", "BR-KHI-01", '["forecast.view", "forecast.override", "indent.approve"]'),
+            ("USR-MGR-LHR", "manager_lhr", "Lahore Branch Manager", "manager", "BR-LHR-01", '["forecast.view", "forecast.override", "indent.approve"]'),
+            ("USR-MGR-ISB", "manager_isb", "Islamabad Branch Manager", "manager", "BR-ISB-01", '["forecast.view", "forecast.override", "indent.approve"]'),
+        ]
+        execute_values(cur, """
+            INSERT INTO public.users (user_id, username, full_name, role, branch_id, permissions)
+            VALUES %s ON CONFLICT (user_id) DO NOTHING;
+        """, users)
+
+        # 2. Production Equipment
+        equipment = [
+            ("EQ-OVEN-01", "Salva Deck Oven 3-Tier", "Deck Oven", "BR-KHI-01", 60, 45, "AVAILABLE"),
+            ("EQ-OVEN-02", "Revent Rotary Rack Oven", "Rotary Rack Oven", "BR-KHI-01", 120, 35, "AVAILABLE"),
+            ("EQ-MIX-01", "Diosna Spiral Mixer 80kg", "Spiral Mixer", "BR-KHI-01", 160, 25, "AVAILABLE"),
+            ("EQ-OVEN-03", "Polin Deck Oven 4-Deck", "Deck Oven", "BR-LHR-01", 80, 45, "AVAILABLE"),
+            ("EQ-OVEN-04", "MIWE Roll-in Rotary Oven", "Rotary Rack Oven", "BR-LHR-01", 120, 35, "AVAILABLE"),
+            ("EQ-OVEN-05", "Wachtel Compact Deck Oven", "Deck Oven", "BR-ISB-01", 50, 40, "AVAILABLE"),
+        ]
+        execute_values(cur, """
+            INSERT INTO public.production_equipment (equipment_id, equipment_name, equipment_type, branch_id, capacity_units_per_batch, batch_duration_minutes, status)
+            VALUES %s ON CONFLICT (equipment_id) DO NOTHING;
+        """, equipment)
+
+        # 3. Raw Materials & Inventory
+        materials = [
+            ("Fine All-Purpose Flour (Maida)", 4500.0, 1200.0, 2000.0, "KG", 140.0, "Fauji Cereals Mills Ltd"),
+            ("Refined White Sugar", 2800.0, 800.0, 1000.0, "KG", 160.0, "Jauharabad Sugar Mills"),
+            ("Pure Vegetable Ghee & Shortening", 1600.0, 500.0, 800.0, "KG", 480.0, "Dalda Foods Pakistan"),
+            ("Farm Fresh Grade-A Eggs", 3200.0, 600.0, 1500.0, "KG", 320.0, "Al-Hilal Poultry Farms"),
+            ("Fresh Pasteurized Whole Milk", 1800.0, 400.0, 1000.0, "LTR", 210.0, "Engro Dairy Foods"),
+            ("Active Dry Baker's Yeast", 420.0, 100.0, 200.0, "KG", 850.0, "Saf-Instant Pakistan"),
+            ("Belgian Dark Cocoa Powder & Drops", 650.0, 150.0, 300.0, "KG", 2450.0, "Puratos Food Ingredients"),
+            ("Traditional Baking Spices & Cardamom", 180.0, 40.0, 100.0, "KG", 1650.0, "National Foods Spice Division"),
+            ("Boneless Diced Chicken Breast", 950.0, 300.0, 500.0, "KG", 880.0, "K&N's Commercial Supplies"),
+            ("Almonds & Pistachio Kernels", 310.0, 80.0, 150.0, "KG", 2900.0, "Swat Valley Dry Fruits Corp")
+        ]
+        execute_values(cur, """
+            INSERT INTO public.raw_inventory (material_name, available_stock, safety_stock, incoming_stock, unit, unit_cost_pkr, supplier_name)
+            VALUES %s ON CONFLICT (material_name) DO NOTHING;
+        """, materials)
+
+        # 4. Standard Recipes (Bill of Materials) per category
+        recipes = []
+        for p in PRODUCT_CATALOG:
+            sku = p[0]
+            cat = p[2]
+            if cat == "BREAD":
+                recipes.extend([
+                    (sku, "Fine All-Purpose Flour (Maida)", 0.42, "KG", 140.0, "Fauji Cereals Mills Ltd"),
+                    (sku, "Refined White Sugar", 0.05, "KG", 160.0, "Jauharabad Sugar Mills"),
+                    (sku, "Pure Vegetable Ghee & Shortening", 0.04, "KG", 480.0, "Dalda Foods Pakistan"),
+                    (sku, "Active Dry Baker's Yeast", 0.015, "KG", 850.0, "Saf-Instant Pakistan")
+                ])
+            elif cat in ("CAKE", "PASTRY"):
+                recipes.extend([
+                    (sku, "Fine All-Purpose Flour (Maida)", 0.35, "KG", 140.0, "Fauji Cereals Mills Ltd"),
+                    (sku, "Refined White Sugar", 0.28, "KG", 160.0, "Jauharabad Sugar Mills"),
+                    (sku, "Farm Fresh Grade-A Eggs", 0.20, "KG", 320.0, "Al-Hilal Poultry Farms"),
+                    (sku, "Belgian Dark Cocoa Powder & Drops", 0.12, "KG", 2450.0, "Puratos Food Ingredients")
+                ])
+            elif cat == "SAVORY":
+                recipes.extend([
+                    (sku, "Fine All-Purpose Flour (Maida)", 0.25, "KG", 140.0, "Fauji Cereals Mills Ltd"),
+                    (sku, "Boneless Diced Chicken Breast", 0.18, "KG", 880.0, "K&N's Commercial Supplies"),
+                    (sku, "Pure Vegetable Ghee & Shortening", 0.08, "KG", 480.0, "Dalda Foods Pakistan"),
+                    (sku, "Traditional Baking Spices & Cardamom", 0.02, "KG", 1650.0, "National Foods Spice Division")
+                ])
+            elif cat == "SWEET":
+                recipes.extend([
+                    (sku, "Fine All-Purpose Flour (Maida)", 0.40, "KG", 140.0, "Fauji Cereals Mills Ltd"),
+                    (sku, "Refined White Sugar", 0.25, "KG", 160.0, "Jauharabad Sugar Mills"),
+                    (sku, "Pure Vegetable Ghee & Shortening", 0.20, "KG", 480.0, "Dalda Foods Pakistan"),
+                    (sku, "Almonds & Pistachio Kernels", 0.05, "KG", 2900.0, "Swat Valley Dry Fruits Corp")
+                ])
+            elif cat == "BEVERAGE":
+                recipes.extend([
+                    (sku, "Fresh Pasteurized Whole Milk", 0.25, "LTR", 210.0, "Engro Dairy Foods"),
+                    (sku, "Refined White Sugar", 0.03, "KG", 160.0, "Jauharabad Sugar Mills")
+                ])
+        
+        execute_values(cur, """
+            INSERT INTO public.recipes (sku_id, ingredient_name, quantity_per_sku, unit, unit_cost_pkr, supplier_name)
+            VALUES %s ON CONFLICT DO NOTHING;
+        """, recipes)
+
+        # 5. Populate ML Staging tables initially from ERP products & branches
+        cur.execute("""
+            INSERT INTO ml.stg_products (sku_id, sku_name, category_id, shelf_life_hours, base_price, status, launch_date)
+            SELECT sku_id, sku_name, category_id, shelf_life_hours, base_price, status, launch_date
+            FROM public.products
+            ON CONFLICT (sku_id) DO UPDATE SET
+                sku_name = EXCLUDED.sku_name,
+                category_id = EXCLUDED.category_id,
+                base_price = EXCLUDED.base_price,
+                status = EXCLUDED.status,
+                ingested_at = CURRENT_TIMESTAMP;
+
+            INSERT INTO ml.stg_branches (branch_id, branch_name, city, area_type, opening_hours, open_date)
+            SELECT branch_id, branch_name, city, area_type, opening_hours, open_date
+            FROM public.branches
+            ON CONFLICT (branch_id) DO UPDATE SET
+                branch_name = EXCLUDED.branch_name,
+                city = EXCLUDED.city,
+                ingested_at = CURRENT_TIMESTAMP;
+
+            INSERT INTO ml.stg_price_lists (sku_id, branch_id, effective_price, effective_from)
+            SELECT sku_id, branch_id, effective_price, effective_from
+            FROM public.price_lists
+            ON CONFLICT (sku_id, branch_id, effective_from) DO NOTHING;
+
+            INSERT INTO ml.stg_promotions (promotion_id, sku_id, branch_id, discount_percent, start_date, end_date, promotion_type)
+            SELECT promotion_id, sku_id, branch_id, discount_percent, start_date, end_date, promotion_type
+            FROM public.promotions
+            ON CONFLICT (promotion_id) DO NOTHING;
+        """)
+
+        conn.commit()
+    print("  [OK] Seeded ERP downstream modules and populated ML staging tables.")
+
 def seed_transactions_and_demand(conn):
     print("[4/5] Preprocessing and enriching transaction dataset with Pakistani regional dynamics...")
     random.seed(42)
@@ -621,6 +746,7 @@ def main():
         setup_schema_ddl(conn)
         seed_calendar_dimension(conn)
         seed_master_data(conn)
+        seed_downstream_erp_modules(conn)
         seed_transactions_and_demand(conn)
         verify_seeding(conn)
         print("==========================================================")

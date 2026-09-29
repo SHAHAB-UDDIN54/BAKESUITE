@@ -75,22 +75,48 @@ def run_35_day_batch_scoring(feature_date: Optional[date] = None) -> Dict[str, A
     # Requirement 15: Use dynamic Asia/Karachi business date if not explicitly passed
     as_at_date = feature_date if feature_date is not None else now_pkt.date()
 
+    start_time = time.time()
     print(f"[BATCH-SCORING] Initiating ML-driven 35-day forecast run: {run_id} as of {as_at_date} (Asia/Karachi)")
 
-    # 1. Fetch ONLY ACTIVE products and branches
+    # 1. Fetch ONLY ACTIVE products and branches from ML staging tables (isolated from ERP transactional tables)
     with engine.connect() as conn:
-        products = conn.execute(text("""
-            SELECT sku_id, sku_name, category_id, base_price, shelf_life_hours, COALESCE(launch_date, '2023-01-01'::date) as launch_date
-            FROM public.products
-            WHERE status = 'ACTIVE'
-            ORDER BY sku_id ASC;
-        """)).fetchall()
-        
-        branches = conn.execute(text("""
-            SELECT branch_id, city, area_type 
-            FROM public.branches 
-            ORDER BY branch_id ASC;
-        """)).fetchall()
+        try:
+            stg_prod_count = conn.execute(text("SELECT COUNT(*) FROM ml.stg_products WHERE status = 'ACTIVE'")).fetchone()[0]
+        except Exception:
+            stg_prod_count = 0
+
+        if stg_prod_count > 0:
+            products = conn.execute(text("""
+                SELECT sku_id, sku_name, category_id, base_price, shelf_life_hours, COALESCE(launch_date, '2023-01-01'::date) as launch_date
+                FROM ml.stg_products
+                WHERE status = 'ACTIVE'
+                ORDER BY sku_id ASC;
+            """)).fetchall()
+        else:
+            products = conn.execute(text("""
+                SELECT sku_id, sku_name, category_id, base_price, shelf_life_hours, COALESCE(launch_date, '2023-01-01'::date) as launch_date
+                FROM public.products
+                WHERE status = 'ACTIVE'
+                ORDER BY sku_id ASC;
+            """)).fetchall()
+
+        try:
+            stg_branch_count = conn.execute(text("SELECT COUNT(*) FROM ml.stg_branches")).fetchone()[0]
+        except Exception:
+            stg_branch_count = 0
+
+        if stg_branch_count > 0:
+            branches = conn.execute(text("""
+                SELECT branch_id, city, area_type 
+                FROM ml.stg_branches 
+                ORDER BY branch_id ASC;
+            """)).fetchall()
+        else:
+            branches = conn.execute(text("""
+                SELECT branch_id, city, area_type 
+                FROM public.branches 
+                ORDER BY branch_id ASC;
+            """)).fetchall()
 
         # Requirement 7: Trailing 56-day max observed demand strictly before the feature date
         # Calculate this separately for SKU + Branch.
@@ -399,6 +425,28 @@ def run_35_day_batch_scoring(feature_date: Optional[date] = None) -> Dict[str, A
             # Prune previous batch runs so table reflects current active batch horizon (3,360 rows)
             cur.execute("DELETE FROM ml.pred_demand_daily WHERE run_id != %s;", (run_id,))
             raw_conn.commit()
+
+        # Insert metadata into ml.forecast_runs
+        with engine.begin() as conn:
+            duration_ms = int((time.time() - start_time) * 1000)
+            conn.execute(text("""
+                INSERT INTO ml.forecast_runs (
+                    run_id, model_version, as_of_date, skus_scored, branches_scored, total_predictions, status, duration_ms
+                ) VALUES (
+                    :run_id, :model_version, :as_of_date, :skus_scored, :branches_scored, :total_predictions, 'COMPLETED', :duration_ms
+                ) ON CONFLICT (run_id) DO UPDATE SET
+                    status = 'COMPLETED',
+                    total_predictions = EXCLUDED.total_predictions,
+                    duration_ms = EXCLUDED.duration_ms;
+            """), {
+                "run_id": run_id,
+                "model_version": champion_version,
+                "as_of_date": as_at_date,
+                "skus_scored": len(products),
+                "branches_scored": len(branches),
+                "total_predictions": len(forecast_rows),
+                "duration_ms": duration_ms
+            })
 
     print(f"  [OK] Model inference batch completed for run {run_id}. Points scored: {len(forecast_rows):,}")
     return {

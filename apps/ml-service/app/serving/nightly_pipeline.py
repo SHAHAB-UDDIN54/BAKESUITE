@@ -105,13 +105,27 @@ def refresh_online_features(as_of_date: Optional[date] = None) -> Dict[str, Any]
     print(f"[NIGHTLY-PIPELINE][02:10 PKT] Step 2: Refreshing online Redis feature store as of {as_at}...")
 
     with engine.connect() as conn:
-        active_entities = conn.execute(text("""
-            SELECT p.sku_id, b.branch_id, p.category_id, p.base_price
-            FROM public.products p
-            CROSS JOIN public.branches b
-            WHERE p.status = 'ACTIVE'
-            ORDER BY p.sku_id, b.branch_id;
-        """)).fetchall()
+        try:
+            stg_prod_count = conn.execute(text("SELECT COUNT(*) FROM ml.stg_products WHERE status = 'ACTIVE'")).fetchone()[0]
+        except Exception:
+            stg_prod_count = 0
+
+        if stg_prod_count > 0:
+            active_entities = conn.execute(text("""
+                SELECT p.sku_id, b.branch_id, p.category_id, p.base_price
+                FROM ml.stg_products p
+                CROSS JOIN ml.stg_branches b
+                WHERE p.status = 'ACTIVE'
+                ORDER BY p.sku_id, b.branch_id;
+            """)).fetchall()
+        else:
+            active_entities = conn.execute(text("""
+                SELECT p.sku_id, b.branch_id, p.category_id, p.base_price
+                FROM public.products p
+                CROSS JOIN public.branches b
+                WHERE p.status = 'ACTIVE'
+                ORDER BY p.sku_id, b.branch_id;
+            """)).fetchall()
 
         # Fetch recent 7-day rolling mean and 56-day max for all active entities in a single query
         stats_query = text("""

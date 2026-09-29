@@ -74,26 +74,51 @@ class PredictionPipelineService:
             if col not in df_features.columns:
                 df_features[col] = 0
 
-        # Group rows by (branch_id, category_id) to run SARIMAX predictions efficiently
-        series_indices: Dict[tuple, List[int]] = {}
+        # Group rows by (branch_id, category_id, forecast_date) to perform level-aligned category blending
+        # Step 1: LightGBM P10/P50/P90 at SKU level generated above
+        # Step 2: Aggregate LightGBM P50 to branch + category + date
+        # Step 3: Generate SARIMAX forecast at SAME branch + category + date
+        # Step 4: Combine aligned category P50 using learned weights
+        # Step 5: Allocate resulting category ensemble back to SKU level using SKU model share
+        # Step 6: Preserve monotonic ordering P10 <= P50 <= P90
+        group_indices: Dict[tuple, List[int]] = {}
         for idx, meta in enumerate(items_meta):
-            key = (meta["branch_id"], meta["category_id"])
-            if key not in series_indices:
-                series_indices[key] = []
-            series_indices[key].append(idx)
+            key = (meta["branch_id"], meta.get("category_id", "CAT"), meta["forecast_date"])
+            if key not in group_indices:
+                group_indices[key] = []
+            group_indices[key].append(idx)
 
-        sarimax_predictions = np.full(len(items_meta), np.nan)
+        # Pre-calculate category-level SARIMAX and allocate back to constituent SKUs
+        sku_allocated_p50: Dict[int, float] = {}
+        sku_sarimax_val: Dict[int, Optional[float]] = {}
+        for (b_id, cat_id, f_date), indices in group_indices.items():
+            sku_p50_dict = {items_meta[i]["sku_id"]: float(p50_lgb[i]) for i in indices}
+            lgbm_cat_p50 = float(sum(sku_p50_dict.values()))
 
-        for (branch_id, category_id), indices in series_indices.items():
-            sub_exog = df_features.iloc[indices][exog_cols].astype(float).values
-            pred_series = self.sarimax_model.predict(
-                branch_id=branch_id,
-                category_id=category_id,
-                steps=len(indices),
-                exog_future=sub_exog
+            first_idx = indices[0]
+            exog_row = df_features.iloc[[first_idx]][exog_cols].astype(float).values
+            sar_pred = self.sarimax_model.predict(
+                branch_id=b_id,
+                category_id=cat_id,
+                steps=1,
+                exog_future=exog_row
             )
-            if pred_series is not None and len(pred_series) == len(indices):
-                sarimax_predictions[indices] = pred_series
+            sar_cat_mean = float(sar_pred[0]) if (sar_pred is not None and len(sar_pred) > 0 and np.isfinite(sar_pred[0])) else None
+
+            # Blend at Category level
+            ens_cat_p50 = self.ensemble.blend_category_level(
+                branch_id=b_id,
+                lgbm_category_p50=lgbm_cat_p50,
+                sarimax_category_mean=sar_cat_mean
+            )
+
+            # Allocate back to constituent SKUs
+            allocated_map = self.ensemble.allocate_to_skus(ens_cat_p50, sku_p50_dict)
+            allocated_sarimax = self.ensemble.allocate_to_skus(sar_cat_mean, sku_p50_dict) if (sar_cat_mean is not None and sar_cat_mean > 0) else {}
+            for i in indices:
+                s_id = items_meta[i]["sku_id"]
+                sku_allocated_p50[i] = allocated_map.get(s_id, float(p50_lgb[i]))
+                sku_sarimax_val[i] = allocated_sarimax.get(s_id, None)
 
         results = []
         for idx, meta in enumerate(items_meta):
@@ -113,18 +138,11 @@ class PredictionPipelineService:
             lgb_p50 = float(p50_lgb[idx])
             lgb_p90 = float(p90_lgb[idx])
 
-            # 3. SARIMAX & Ensemble Blending
-            sarimax_val = sarimax_predictions[idx]
-            sarimax_mean = np.array([sarimax_val]) if np.isfinite(sarimax_val) else None
-
-            blended_p50_arr = self.ensemble.predict_ensemble_p50(
-                branch_id=branch_id,
-                lgbm_p50=np.array([lgb_p50]),
-                sarimax_mean=sarimax_mean
-            )
-            raw_p50 = float(blended_p50_arr[0])
+            # 3. Level-aligned ensemble SKU allocation
+            raw_p50 = float(sku_allocated_p50.get(idx, lgb_p50))
             raw_p10 = lgb_p10
             raw_p90 = lgb_p90
+            sarimax_val = sku_sarimax_val.get(idx, None)
 
             # 4. Documented Promotion Business Rule Adjustment
             # Applied only if promo_depth > 0 as an explicit scenario adjustment
@@ -177,6 +195,7 @@ class PredictionPipelineService:
             expected_rev = round(final_p50 * scenario_price, 2)
 
             weights = self.ensemble.get_weights_for_branch(branch_id)
+            has_sarimax = (sarimax_val is not None and np.isfinite(sarimax_val))
 
             results.append({
                 "sku_id": sku_id,
@@ -187,7 +206,7 @@ class PredictionPipelineService:
                 "p50_quantity": final_p50,
                 "p90_quantity": final_p90,
                 "lgb_p50": round(lgb_p50, 1),
-                "sarimax_p50": round(float(sarimax_val), 1) if np.isfinite(sarimax_val) else None,
+                "sarimax_p50": round(float(sarimax_val), 1) if has_sarimax else None,
                 "ensemble_weights": {"lgbm": weights[0], "sarimax": weights[1]},
                 "unit_of_measure": "PCS",
                 "expected_revenue_pkr": expected_rev,
@@ -197,7 +216,7 @@ class PredictionPipelineService:
                 "event_context": event_name,
                 "driver_summary": drivers,
                 "cold_start_flag": is_cold_start,
-                "served_from": "ensemble" if np.isfinite(sarimax_val) else "lgbm_fallback"
+                "served_from": "ensemble" if has_sarimax else "lgbm_fallback"
             })
 
         return results

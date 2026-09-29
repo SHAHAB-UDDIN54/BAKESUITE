@@ -231,3 +231,152 @@ CREATE TABLE IF NOT EXISTS ml.model_audit_log (
     user_id VARCHAR(64) DEFAULT 'system-ml-orchestrator',
     timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
+
+-- 3. Public Schema: Downstream Execution Modules (Indents, Kitchen Production, Purchase Orders, BOM)
+CREATE TABLE IF NOT EXISTS public.users (
+    user_id VARCHAR(64) PRIMARY KEY,
+    username VARCHAR(64) UNIQUE NOT NULL,
+    full_name VARCHAR(128) NOT NULL,
+    role VARCHAR(32) NOT NULL DEFAULT 'manager',
+    branch_id VARCHAR(32) REFERENCES public.branches(branch_id),
+    permissions JSONB NOT NULL DEFAULT '["forecast.view", "forecast.override", "indent.approve", "production.plan", "purchase.approve"]',
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS public.branch_indents (
+    indent_id BIGSERIAL PRIMARY KEY,
+    branch_id VARCHAR(32) NOT NULL REFERENCES public.branches(branch_id),
+    sku_id VARCHAR(32) NOT NULL REFERENCES public.products(sku_id),
+    indent_date DATE NOT NULL,
+    p50_demand INT NOT NULL,
+    suggested_qty INT NOT NULL,
+    approved_qty INT NOT NULL,
+    safety_buffer INT NOT NULL DEFAULT 0,
+    status VARCHAR(32) NOT NULL DEFAULT 'Pending Approval',
+    approved_by VARCHAR(64),
+    approved_at TIMESTAMPTZ,
+    notes TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (branch_id, sku_id, indent_date)
+);
+CREATE INDEX IF NOT EXISTS idx_branch_indents_lookup ON public.branch_indents (branch_id, indent_date);
+
+CREATE TABLE IF NOT EXISTS public.production_equipment (
+    equipment_id VARCHAR(32) PRIMARY KEY,
+    equipment_name VARCHAR(128) NOT NULL,
+    equipment_type VARCHAR(64) NOT NULL, -- 'Deck Oven', 'Rotary Rack Oven', 'Spiral Mixer', etc.
+    branch_id VARCHAR(32) NOT NULL REFERENCES public.branches(branch_id),
+    capacity_units_per_batch INT NOT NULL,
+    batch_duration_minutes INT NOT NULL,
+    status VARCHAR(32) DEFAULT 'AVAILABLE'
+);
+
+CREATE TABLE IF NOT EXISTS public.recipes (
+    recipe_id BIGSERIAL PRIMARY KEY,
+    sku_id VARCHAR(32) NOT NULL REFERENCES public.products(sku_id),
+    ingredient_name VARCHAR(128) NOT NULL,
+    quantity_per_sku NUMERIC(8,4) NOT NULL,
+    unit VARCHAR(16) NOT NULL,
+    unit_cost_pkr NUMERIC(10,2) NOT NULL,
+    supplier_name VARCHAR(128) NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_recipes_sku ON public.recipes (sku_id);
+
+CREATE TABLE IF NOT EXISTS public.production_plans (
+    plan_id BIGSERIAL PRIMARY KEY,
+    branch_id VARCHAR(32) NOT NULL REFERENCES public.branches(branch_id),
+    sku_id VARCHAR(32) NOT NULL REFERENCES public.products(sku_id),
+    production_date DATE NOT NULL,
+    shift_name VARCHAR(32) NOT NULL DEFAULT 'Morning (04:00-12:00)',
+    equipment_id VARCHAR(32) REFERENCES public.production_equipment(equipment_id),
+    batch_count INT NOT NULL DEFAULT 1,
+    scheduled_qty INT NOT NULL,
+    status VARCHAR(32) NOT NULL DEFAULT 'SCHEDULED',
+    created_by VARCHAR(64) NOT NULL DEFAULT 'baking-supervisor',
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_production_plans_date ON public.production_plans (branch_id, production_date);
+
+CREATE TABLE IF NOT EXISTS public.raw_inventory (
+    material_name VARCHAR(128) PRIMARY KEY,
+    available_stock NUMERIC(10,2) NOT NULL DEFAULT 0.0,
+    safety_stock NUMERIC(10,2) NOT NULL DEFAULT 0.0,
+    incoming_stock NUMERIC(10,2) NOT NULL DEFAULT 0.0,
+    unit VARCHAR(16) NOT NULL,
+    unit_cost_pkr NUMERIC(10,2) NOT NULL,
+    supplier_name VARCHAR(128) NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS public.purchase_orders (
+    po_id VARCHAR(64) PRIMARY KEY,
+    supplier_name VARCHAR(128) NOT NULL,
+    material_name VARCHAR(128) NOT NULL,
+    order_date DATE NOT NULL,
+    required_qty NUMERIC(10,2) NOT NULL,
+    unit VARCHAR(16) NOT NULL,
+    unit_cost_pkr NUMERIC(10,2) NOT NULL,
+    total_amount_pkr NUMERIC(12,2) NOT NULL,
+    status VARCHAR(32) NOT NULL DEFAULT 'ISSUED',
+    issued_by VARCHAR(64) NOT NULL DEFAULT 'procurement-manager',
+    notes TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_purchase_orders_date ON public.purchase_orders (order_date);
+
+-- 4. ML Schema: Staging Tables for ERP Data Extraction (Strict Isolation: ML never directly accesses ERP transactional tables)
+CREATE TABLE IF NOT EXISTS ml.stg_products (
+    sku_id VARCHAR(32) PRIMARY KEY,
+    sku_name VARCHAR(128) NOT NULL,
+    category_id VARCHAR(32) NOT NULL,
+    shelf_life_hours INT NOT NULL,
+    base_price NUMERIC(10,2) NOT NULL,
+    status VARCHAR(16) NOT NULL,
+    launch_date DATE NOT NULL,
+    ingested_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS ml.stg_branches (
+    branch_id VARCHAR(32) PRIMARY KEY,
+    branch_name VARCHAR(128) NOT NULL,
+    city VARCHAR(64) NOT NULL,
+    area_type VARCHAR(64) NOT NULL,
+    opening_hours VARCHAR(32) NOT NULL,
+    open_date DATE NOT NULL,
+    ingested_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS ml.stg_price_lists (
+    sku_id VARCHAR(32) NOT NULL,
+    branch_id VARCHAR(32) NOT NULL,
+    effective_price NUMERIC(10,2) NOT NULL,
+    effective_from DATE NOT NULL,
+    ingested_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (sku_id, branch_id, effective_from)
+);
+
+CREATE TABLE IF NOT EXISTS ml.stg_promotions (
+    promotion_id VARCHAR(64) PRIMARY KEY,
+    sku_id VARCHAR(32) NOT NULL,
+    branch_id VARCHAR(32) NOT NULL,
+    discount_percent NUMERIC(5,2) NOT NULL,
+    start_date DATE NOT NULL,
+    end_date DATE NOT NULL,
+    promotion_type VARCHAR(32) DEFAULT 'PERCENTAGE_DISCOUNT',
+    ingested_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS ml.forecast_runs (
+    run_id VARCHAR(64) PRIMARY KEY,
+    as_of_date DATE NOT NULL,
+    horizon_days INT NOT NULL DEFAULT 35,
+    model_version VARCHAR(64) NOT NULL,
+    skus_scored INT NOT NULL DEFAULT 0,
+    total_forecasts INT NOT NULL DEFAULT 0,
+    duration_seconds NUMERIC(8,2) NOT NULL DEFAULT 0.0,
+    status VARCHAR(32) NOT NULL DEFAULT 'COMPLETED',
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_forecast_runs_date ON ml.forecast_runs (as_of_date, created_at);

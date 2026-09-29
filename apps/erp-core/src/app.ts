@@ -4,6 +4,8 @@ import { healthRouter } from './routes/health.js';
 import { extractsRouter } from './routes/extracts.js';
 import { forecastsRouter } from './routes/forecasts.js';
 import { overridesRouter } from './routes/overrides.js';
+import { authRouter } from './routes/auth.js';
+import { downstreamRouter } from './routes/downstream.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -31,6 +33,8 @@ app.use(express.json());
 
 // Register API Routes
 app.use('/api/v1', healthRouter);
+app.use('/api/v1', authRouter);
+app.use('/api/v1', downstreamRouter);
 app.use('/api/v1/ai/extracts', extractsRouter);
 app.use('/api/v1/ai', forecastsRouter);
 app.use('/api/v1/ai', overridesRouter);

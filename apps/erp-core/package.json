@@ -9,7 +9,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsc && node dist/index.js",
-    "test": "tsc && node dist/test-verify.js && node dist/test-circuit-breaker.js",
+    "test": "tsc && node dist/test-verify.js && node dist/test-circuit-breaker.js && node dist/test-downstream.js",
     "test:circuit-breaker": "tsc && node dist/test-circuit-breaker.js"
   },
   "dependencies": {

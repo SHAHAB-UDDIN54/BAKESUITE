@@ -105,6 +105,52 @@ class P50WeightedEnsemble:
         blended = (w_lgbm * lgbm_p50) + (w_sarimax * sarimax_mean)
         return np.maximum(1, np.round(blended)).astype(int)
 
+    def blend_category_level(
+        self,
+        branch_id: str,
+        lgbm_category_p50: float,
+        sarimax_category_mean: Optional[float]
+    ) -> float:
+        """
+        Combines Category-level aggregated LightGBM P50 and Category-level SARIMAX mean.
+        Uses learned branch NNLS weights: w_lgbm * lgbm_cat + w_sarimax * sarimax_cat.
+        """
+        if sarimax_category_mean is None or not np.isfinite(sarimax_category_mean):
+            return float(max(1.0, lgbm_category_p50))
+
+        w_lgbm, w_sarimax = self.get_weights_for_branch(branch_id)
+        blended_cat = (w_lgbm * lgbm_category_p50) + (w_sarimax * sarimax_category_mean)
+        return float(max(1.0, blended_cat))
+
+    def allocate_to_skus(
+        self,
+        ensemble_category_p50: float,
+        sku_lgbm_p50_dict: Dict[str, float]
+    ) -> Dict[str, float]:
+        """
+        Allocates category-level ensemble forecast back to constituent SKUs
+        proportional to each SKU's LightGBM quantile prediction share.
+        Preserves total category demand while leveraging SKU-level LightGBM distribution.
+        """
+        total_lgbm = sum(sku_lgbm_p50_dict.values())
+        allocated = {}
+        n_skus = len(sku_lgbm_p50_dict)
+
+        if n_skus == 0:
+            return allocated
+
+        if total_lgbm > 0:
+            for sku_id, p50_val in sku_lgbm_p50_dict.items():
+                share = p50_val / total_lgbm
+                allocated[sku_id] = float(max(1.0, round(ensemble_category_p50 * share)))
+        else:
+            # Fallback to equal allocation if all LightGBM predictions are zero
+            equal_share = ensemble_category_p50 / n_skus
+            for sku_id in sku_lgbm_p50_dict.keys():
+                allocated[sku_id] = float(max(1.0, round(equal_share)))
+
+        return allocated
+
     def get_weights_for_branch(self, branch_id: str) -> Tuple[float, float]:
         """Returns (lgbm_weight, sarimax_weight) for the specified branch or DEFAULT."""
         return self.branch_weights.get(branch_id, self.branch_weights.get("DEFAULT", (0.75, 0.25)))
